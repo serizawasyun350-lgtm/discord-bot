@@ -47,11 +47,14 @@ class MyBot(discord.Client):
         self.server_rule_text = "1. 誹謗中傷や暴言の禁止\n2. スパム・連投行為の禁止\n3. 宣伝行為は専用チャンネルでのみ許可\n4. 運営・管理者の指示に従うこと"
         self.start_time = datetime.datetime.now(datetime.timezone.utc)
         self.custom_status = None
+        # 自動更新するステータスメッセージを保持するリスト [message_object, ...]
+        self.active_status_messages = []
 
     async def setup_hook(self):
         await self.tree.sync()
         print("スラッシュコマンドを同期しました。")
         self.update_status_task.start()
+        self.refresh_status_messages_task.start()
 
     @tasks.loop(seconds=30)
     async def update_status_task(self):
@@ -81,6 +84,45 @@ class MyBot(discord.Client):
     async def before_update_status(self):
         await self.wait_until_ready()
 
+    # 投稿された /status メッセージの内容を10秒ごとに自動更新（リアルタイムPingや稼働時間の反映）するタスク
+    @tasks.loop(seconds=10)
+    async def refresh_status_messages_task(self):
+        if not self.active_status_messages:
+            return
+
+        latency = round(self.latency * 1000)
+        now = datetime.datetime.now(datetime.timezone.utc)
+        uptime_delta = now - self.start_time
+        
+        hours, remainder = divmod(int(uptime_delta.total_seconds()), 3600)
+        minutes, seconds = divmod(remainder, 60)
+        days, hours = divmod(hours, 24)
+        uptime_str = f"{days}日 {hours}時間 {minutes}分 {seconds}秒" if days > 0 else f"{hours}時間 {minutes}分 {seconds}秒"
+
+        embed = discord.Embed(title="🟢 Bot システム稼働状況 (自動更新中)", color=discord.Color.green())
+        embed.add_field(name="接続状態", value="正常稼働中 (Online)", inline=True)
+        embed.add_field(name="応答速度 (Ping)", value=f"`{latency} ms`", inline=True)
+        embed.add_field(name="導入サーバー数", value=f"`{len(self.guilds)}` サーバー", inline=True)
+        embed.add_field(name="連続稼働時間 (Uptime)", value=f"`{uptime_str}`", inline=False)
+        embed.set_footer(text="このメッセージは自動でリアルタイム更新されています")
+
+        # 削除されたメッセージをクリーンアップしつつ、残っているメッセージを書き換える
+        surviving_messages = []
+        for msg in self.active_status_messages:
+            try:
+                # チャンネルからメッセージを取得できるか（削除されていないか）確認
+                fetched_msg = await msg.channel.fetch_message(msg.id)
+                await fetched_msg.edit(embed=embed)
+                surviving_messages.append(msg)
+            except Exception:
+                # 削除されていた場合は追跡リストから除外
+                pass
+        self.active_status_messages = surviving_messages
+
+    @refresh_status_messages_task.before_loop
+    async def before_refresh_status(self):
+        await self.wait_until_ready()
+
 client = MyBot()
 
 @client.event
@@ -92,7 +134,6 @@ async def on_ready():
 # ==========================================
 @client.event
 async def on_message(message: discord.Message):
-    # Bot自身やDM、管理者のメッセージは除外
     if message.author.bot or not message.guild:
         return
     if message.author.guild_permissions.administrator:
@@ -104,31 +145,23 @@ async def on_message(message: discord.Message):
     if user_id not in client.user_message_timestamps:
         client.user_message_timestamps[user_id] = []
 
-    # 5秒以内のメッセージ履歴を抽出
     timestamps = client.user_message_timestamps[user_id]
     timestamps = [t for t in timestamps if (now - t).total_seconds() < 5]
     timestamps.append(now)
     client.user_message_timestamps[user_id] = timestamps
 
-    # 5秒以内に4回以上投稿された場合をスパム（連投）とみなす
     if len(timestamps) >= 4:
         try:
-            # 1. 該当メッセージの自動削除
             await message.delete()
-            
-            # 2. 10分間のタイムアウト(TO)の付与
             duration = datetime.timedelta(minutes=10)
             await message.author.timeout(duration, reason="自動スパム検知による連投規制")
             
-            # 3. 警告通知（全員に表示し、15秒後に自動消去）
             embed = discord.Embed(
                 title="⚠️ スパム検知（自動規制）",
                 description=f"{message.author.mention} 様が短時間に大量のメッセージを投稿したため、メッセージを**自動削除**し、**10分間のタイムアウト（TO）**を実行しました。\n\n※誤検知の場合は管理者が `/moderation untimeout` で解除できます。",
                 color=discord.Color.red()
             )
             await message.channel.send(embed=embed, delete_after=15)
-            
-            # 履歴をクリア
             client.user_message_timestamps[user_id] = []
         except Exception as e:
             print(f"スパム処理中にエラーが発生しました: {e}")
@@ -173,14 +206,19 @@ async def status_cmd(interaction: discord.Interaction):
     
     uptime_str = f"{days}日 {hours}時間 {minutes}分 {seconds}秒" if days > 0 else f"{hours}時間 {minutes}分 {seconds}秒"
 
-    embed = discord.Embed(title="🟢 Bot システム稼働状況", color=discord.Color.green())
+    embed = discord.Embed(title="🟢 Bot システム稼働状況 (自動更新中)", color=discord.Color.green())
     embed.add_field(name="接続状態", value="正常稼働中 (Online)", inline=True)
     embed.add_field(name="応答速度 (Ping)", value=f"`{latency} ms`", inline=True)
     embed.add_field(name="導入サーバー数", value=f"`{len(client.guilds)}` サーバー", inline=True)
     embed.add_field(name="連続稼働時間 (Uptime)", value=f"`{uptime_str}`", inline=False)
-    embed.set_footer(text=f"実行者: {interaction.user.display_name}")
+    embed.set_footer(text="このメッセージは自動でリアルタイム更新されています")
+
+    # 1. 実行した本人だけに「ステータスを表示しました」と返信（自分だけに表示）
+    await interaction.response.send_message("ステータスを表示しました", ephemeral=True)
     
-    await interaction.response.send_message(embed=embed)
+    # 2. チャンネルに自動更新されるステータス用の埋め込みメッセージを送信して追跡リストに登録
+    sent_msg = await interaction.channel.send(embed=embed)
+    client.active_status_messages.append(sent_msg)
 
 @client.tree.command(name="server", description="現在のサーバーの情報を表示する")
 async def server_info_cmd(interaction: discord.Interaction):
