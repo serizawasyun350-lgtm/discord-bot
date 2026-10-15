@@ -8,7 +8,7 @@ from discord import app_commands
 from discord.ui import View, Button
 
 # ==========================================
-# 0. Renderのポート検知対策用 Webサーバー
+# 0. Renderのポート検知 & HEADリクエスト対応 Webサーバー
 # ==========================================
 class SimpleHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -16,13 +16,20 @@ class SimpleHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(b"Bot is running!")
 
+    def do_HEAD(self):
+        # Render等のヘルスチェックによるHEADリクエストに正常(200)応答を返す
+        self.send_response(200)
+        self.end_headers()
+
+    # ログ出力（ターミナルが汚れるのを防ぐため最小限に抑制）
+    def log_message(self, format, *args):
+        return
+
 def run_web_server():
-    # Renderが割り当てるポート番号（環境変数 PORT がなければ 10000 を使用）
     port = int(os.environ.get("PORT", 10000))
     server = HTTPServer(("0.0.0.0", port), SimpleHandler)
     server.serve_forever()
 
-# 別スレッドでWebサーバーを起動し、ポートを開く
 server_thread = threading.Thread(target=run_web_server, daemon=True)
 server_thread.start()
 
@@ -293,7 +300,7 @@ class TicketCloseView(View):
         if not interaction.user.guild_permissions.administrator:
             await interaction.response.send_message("❌ 管理者のみ閉じることができます。", ephemeral=True)
             return
-        await interaction.response.send_message("🔒 5秒後にチャンネルを削除します。", ephemeral=True)
+        await interaction.response.send_message("🔒 5秒後にチャンネルが削除されます。", ephemeral=True)
         await asyncio.sleep(5)
         try:
             await interaction.channel.delete()
