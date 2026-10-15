@@ -6,6 +6,7 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 import discord
 from discord import app_commands
 from discord.ui import View, Button
+from discord.ext import tasks
 
 # ==========================================
 # 0. Renderのポート検知 & HEADリクエスト対応 Webサーバー
@@ -17,11 +18,9 @@ class SimpleHandler(BaseHTTPRequestHandler):
         self.wfile.write(b"Bot is running!")
 
     def do_HEAD(self):
-        # Render等のヘルスチェックによるHEADリクエストに正常(200)応答を返す
         self.send_response(200)
         self.end_headers()
 
-    # ログ出力（ターミナルが汚れるのを防ぐため最小限に抑制）
     def log_message(self, format, *args):
         return
 
@@ -45,10 +44,43 @@ class MyBot(discord.Client):
         self.tree = app_commands.CommandTree(self)
         self.user_message_timestamps = {}
         self.auth_role_id = None
+        self.server_rule_text = "1. 誹謗中傷や暴言の禁止\n2. スパム・連投行為の禁止\n3. 宣伝行為は専用チャンネルでのみ許可\n4. 運営・管理者の指示に従うこと"
+        self.start_time = datetime.datetime.now(datetime.timezone.utc)
+        self.custom_status = None # 手動変更されたステータスを保持
 
     async def setup_hook(self):
         await self.tree.sync()
         print("スラッシュコマンドを同期しました。")
+        self.update_status_task.start()
+
+    @tasks.loop(seconds=30)
+    async def update_status_task(self):
+        try:
+            # 手動でカスタム変更されている場合はそれを維持、されていなければローテーション
+            if self.custom_status:
+                await self.change_presence(activity=self.custom_status)
+                return
+
+            latency = round(self.latency * 1000)
+            guilds_count = len(self.guilds)
+            
+            statuses = [
+                discord.Activity(type=discord.ActivityType.playing, name="/help で使い方を確認"),
+                discord.Activity(type=discord.ActivityType.watching, name=f"{guilds_count} サーバーを監視中"),
+                discord.Activity(type=discord.ActivityType.listening, name=f"Ping: {latency}ms")
+            ]
+            
+            for status in statuses:
+                if self.custom_status:
+                    break
+                await self.change_presence(activity=status)
+                await asyncio.sleep(10)
+        except Exception as e:
+            print(f"ステータス自動更新エラー: {e}")
+
+    @update_status_task.before_loop
+    async def before_update_status(self):
+        await self.wait_until_ready()
 
 client = MyBot()
 
@@ -95,6 +127,160 @@ async def on_message(message: discord.Message):
 # ==========================================
 # 各種コマンド群
 # ==========================================
+
+# --- 新規追加：プレイ中ステータス変更コマンド (/status-change) ---
+@client.tree.command(name="status-change", description="Botのプレイ中（アクティビティ）を手動で変更する(管理者)")
+@app_commands.checks.has_permissions(administrator=True)
+@app_commands.choices(activity_type=[
+    app_commands.Choice(name="プレイ中 (Playing)", value="playing"),
+    app_commands.Choice(name="配信中 (Streaming)", value="streaming"),
+    app_commands.Choice(name="聴いている (Listening)", value="listening"),
+    app_commands.Choice(name="視聴中 (Watching)", value="watching"),
+])
+async def status_change_cmd(interaction: discord.Interaction, activity_type: str, text: str):
+    if activity_type == "playing":
+        act = discord.Activity(type=discord.ActivityType.playing, name=text)
+    elif activity_type == "streaming":
+        act = discord.Activity(type=discord.ActivityType.streaming, name=text, url="https://twitch.tv/twitch")
+    elif activity_type == "listening":
+        act = discord.Activity(type=discord.ActivityType.listening, name=text)
+    elif activity_type == "watching":
+        act = discord.Activity(type=discord.ActivityType.watching, name=text)
+    else:
+        act = discord.Activity(type=discord.ActivityType.playing, name=text)
+
+    client.custom_status = act
+    await client.change_presence(activity=act)
+    await interaction.response.send_message(f"✨ Botのステータスを変更しました：**{activity_type} / {text}**", ephemeral=True)
+
+# --- ステータス確認コマンド (/status) ---
+@client.tree.command(name="status", description="Botのシステム稼働状況やPingを詳細に表示する")
+async def status_cmd(interaction: discord.Interaction):
+    latency = round(client.latency * 1000)
+    now = datetime.datetime.now(datetime.timezone.utc)
+    uptime_delta = now - client.start_time
+    
+    hours, remainder = divmod(int(uptime_delta.total_seconds()), 3600)
+    minutes, seconds = divmod(remainder, 60)
+    days, hours = divmod(hours, 24)
+    
+    uptime_str = f"{days}日 {hours}時間 {minutes}分 {seconds}秒" if days > 0 else f"{hours}時間 {minutes}分 {seconds}秒"
+
+    embed = discord.Embed(title="🟢 Bot システム稼働状況", color=discord.Color.green())
+    embed.add_field(name="接続状態", value="正常稼働中 (Online)", inline=True)
+    embed.add_field(name="応答速度 (Ping)", value=f"`{latency} ms`", inline=True)
+    embed.add_field(name="導入サーバー数", value=f"`{len(client.guilds)}` サーバー", inline=True)
+    embed.add_field(name="連続稼働時間 (Uptime)", value=f"`{uptime_str}`", inline=False)
+    embed.set_footer(text="ステータスやプレイ中は自動更新されています")
+    
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+# --- サーバー情報表示コマンド (/server) ---
+@client.tree.command(name="server", description="現在のサーバーの情報を表示する")
+async def server_info_cmd(interaction: discord.Interaction):
+    guild = interaction.guild
+    embed = discord.Embed(title=f"🏰 サーバー情報: {guild.name}", color=discord.Color.blue())
+    if guild.icon:
+        embed.set_thumbnail(url=guild.icon.url)
+    
+    embed.add_field(name="サーバーID", value=guild.id, inline=True)
+    embed.add_field(name="オーナー", value=guild.owner.mention if guild.owner else "不明", inline=True)
+    embed.add_field(name="メンバー数", value=f"{guild.member_count} 人", inline=True)
+    embed.add_field(name="チャンネル数", value=f"{len(guild.channels)} 個", inline=True)
+    embed.add_field(name="ロール数", value=f"{len(guild.roles)} 個", inline=True)
+    embed.add_field(name="サーバーブースト", value=f"Level {guild.premium_tier} ({guild.premium_subscription_count} ブースト)", inline=True)
+    embed.add_field(name="サーバー作成日", value=guild.created_at.strftime('%Y/%m/%d %H:%M'), inline=False)
+    
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+# --- 便利な単体便利コマンド ---
+@client.tree.command(name="poll", description="簡易アンケートを作成する")
+async def poll_cmd(interaction: discord.Interaction, question: str, option1: str, option2: str, option3: str = None, option4: str = None):
+    options = [option1, option2]
+    if option3: options.append(option3)
+    if option4: options.append(option4)
+
+    emojis = ["1️⃣", "2️⃣", "3️⃣", "4️⃣"]
+    desc = f"**質問:** {question}\n\n"
+    for i, opt in enumerate(options):
+        desc += f"{emojis[i]} {opt}\n"
+
+    embed = discord.Embed(title="📊 アンケート投票", description=desc, color=discord.Color.blurple())
+    embed.set_footer(text=f"投票作成者: {interaction.user.display_name}")
+    
+    await interaction.response.send_message("✨ アンケートを作成しました！", ephemeral=True)
+    msg = await interaction.channel.send(embed=embed)
+    for i in range(len(options)):
+        await msg.add_reaction(emojis[i])
+
+@client.tree.command(name="clear", description="指定した数のメッセージをまとめて削除(管理者)")
+@app_commands.checks.has_permissions(administrator=True)
+async def clear_cmd(interaction: discord.Interaction, count: int):
+    if count < 1 or count > 100:
+        await interaction.response.send_message("❌ 削除数は1から100の間で指定してください。", ephemeral=True)
+        return
+    await interaction.response.defer(ephemeral=True)
+    deleted = await interaction.channel.purge(limit=count)
+    await interaction.followup.send(f"🗑️ {len(deleted)} 件のメッセージを削除しました。", ephemeral=True)
+
+@client.tree.command(name="userinfo", description="指定したユーザーの情報を表示する")
+async def userinfo_cmd(interaction: discord.Interaction, member: discord.Member = None):
+    target = member or interaction.user
+    roles = [r.mention for r in target.roles if r != interaction.guild.default_role]
+    roles_str = ", ".join(roles) if roles else "なし"
+
+    embed = discord.Embed(title=f"👤 ユーザー情報: {target.display_name}", color=target.color)
+    embed.set_thumbnail(url=target.display_avatar.url)
+    embed.add_field(name="ユーザー名", value=target.name, inline=True)
+    embed.add_field(name="ID", value=target.id, inline=True)
+    embed.add_field(name="サーバー参加日", value=target.joined_at.strftime('%Y/%m/%d %H:%M') if target.joined_at else "不明", inline=False)
+    embed.add_field(name="アカウント作成日", value=target.created_at.strftime('%Y/%m/%d %H:%M'), inline=False)
+    embed.add_field(name=f"保有ロール ({len(roles)}個)", value=roles_str, inline=False)
+    
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+# --- 固定メッセージコマンド (/pin-message) ---
+pin_group = app_commands.Group(name="pin-message", description="固定メッセージ管理")
+
+@pin_group.command(name="create", description="メッセージを送信して自動でピン留め(管理者)")
+@app_commands.checks.has_permissions(administrator=True)
+async def pin_message_create(interaction: discord.Interaction, channel: discord.TextChannel, content: str):
+    try:
+        formatted_content = content.replace("\\n", "\n")
+        embed = discord.Embed(title="📌 重要なお知らせ", description=formatted_content, color=discord.Color.blue())
+        msg = await channel.send(embed=embed)
+        await msg.pin(reason="固定メッセージコマンドによるピン留め")
+        await interaction.response.send_message(f"✨ {channel.mention} にメッセージを送信し、ピン留めしました。", ephemeral=True)
+    except Exception as e:
+        await interaction.response.send_message(f"❌ 固定メッセージの作成に失敗しました: {e}", ephemeral=True)
+
+client.tree.add_command(pin_group)
+
+# --- ルール管理コマンド (/rule) ---
+rule_group = app_commands.Group(name="rule", description="サーバーのルール管理")
+
+@rule_group.command(name="show", description="サーバーのルールを表示")
+async def rule_show(interaction: discord.Interaction):
+    embed = discord.Embed(title="📜 サーバー利用ルール", description=client.server_rule_text, color=discord.Color.blue())
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+@rule_group.command(name="set", description="ルールを設定・更新(管理者)")
+@app_commands.checks.has_permissions(administrator=True)
+async def rule_set(interaction: discord.Interaction, content: str):
+    client.server_rule_text = content.replace("\\n", "\n")
+    await interaction.response.send_message("✅ サー바ールールを更新しました。", ephemeral=True)
+
+@rule_group.command(name="panel", description="ルールパネルをチャンネルに設置(管理者)")
+@app_commands.checks.has_permissions(administrator=True)
+async def rule_panel(interaction: discord.Interaction):
+    embed = discord.Embed(title="📜 サーバー利用ルール", description=client.server_rule_text, color=discord.Color.gold())
+    embed.set_footer(text="ルールを守って楽しく利用しましょう！")
+    await interaction.channel.send(embed=embed)
+    await interaction.response.send_message("✨ ルールパネルを設置しました。", ephemeral=True)
+
+client.tree.add_command(rule_group)
+
+# --- 広告系 (/ad) ---
 ad_group = app_commands.Group(name="ad", description="広告管理")
 
 @ad_group.command(name="approve", description="広告申請を承認(管理者)")
@@ -143,7 +329,7 @@ async def ad_stop(interaction: discord.Interaction):
 
 client.tree.add_command(ad_group)
 
-# 認証系
+# --- 認証系 (/auth) ---
 class AuthVerifyView(View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -191,7 +377,7 @@ async def auth_toggle(interaction: discord.Interaction, state: bool):
 
 client.tree.add_command(auth_group)
 
-# 自動モデレーション
+# --- 自動モデレーション (/automod) ---
 automod_group = app_commands.Group(name="automod", description="自動モデレーション")
 @automod_group.command(name="add", description="禁止ワードルールを追加")
 @app_commands.checks.has_permissions(administrator=True)
@@ -210,7 +396,7 @@ async def automod_toggle(interaction: discord.Interaction, rule_id: str):
     await interaction.response.send_message(f"🔄 ルールID `{rule_id}` の有効/無効を切り替えました。", ephemeral=True)
 client.tree.add_command(automod_group)
 
-# モデレーション管理
+# --- モデレーション管理 (/moderation) ---
 moderation_group = app_commands.Group(name="moderation", description="モデレーション管理")
 @moderation_group.command(name="cases", description="最近のAutoMod検知ケースを確認")
 @app_commands.checks.has_permissions(administrator=True)
@@ -235,7 +421,7 @@ async def moderation_untimeout(interaction: discord.Interaction, member: discord
         await interaction.response.send_message(f"❌ 解除に失敗しました: {e}", ephemeral=True)
 client.tree.add_command(moderation_group)
 
-# チャンネル管理
+# --- チャンネル管理 (/channel) ---
 channel_group = app_commands.Group(name="channel", description="チャンネル操作")
 @channel_group.command(name="create", description="チャンネルを作成")
 @app_commands.checks.has_permissions(administrator=True)
@@ -252,7 +438,7 @@ async def channel_reset_permissions(interaction: discord.Interaction):
     await interaction.response.send_message("🔄 権限上書きをリセットしました。", ephemeral=True)
 client.tree.add_command(channel_group)
 
-# Ping監視
+# --- Ping監視 (/ping) ---
 ping_group = app_commands.Group(name="ping", description="監視コマンド")
 @ping_group.command(name="add", description="監視URLを登録(60秒間隔)")
 @app_commands.checks.has_permissions(administrator=True)
@@ -278,7 +464,7 @@ async def ping_stop(interaction: discord.Interaction):
     await interaction.response.send_message("⏹️ 監視を停止しました。", ephemeral=True)
 client.tree.add_command(ping_group)
 
-# サポート・チケット
+# --- サポート・チケット系 (/support-status, /ticket) ---
 support_group = app_commands.Group(name="support-status", description="対応状況管理")
 @support_group.command(name="panel", description="対応状況パネルを設置(管理者)")
 @app_commands.checks.has_permissions(administrator=True)
@@ -335,7 +521,7 @@ async def ticket_panel(interaction: discord.Interaction):
     await interaction.response.send_message("✨ パネルを設置しました。", ephemeral=True)
 client.tree.add_command(ticket_group)
 
-# 便利ツールパネル等
+# --- 便利ツールパネル等 ---
 class UtilityPanelView(View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -386,10 +572,6 @@ async def panel_cmd(interaction: discord.Interaction):
 @app_commands.checks.has_permissions(administrator=True)
 async def reset_cmd(interaction: discord.Interaction):
     await interaction.response.send_message("⚠️ 無効化されています。", ephemeral=True)
-
-@client.tree.command(name="status", description="システム稼働状況")
-async def status_cmd(interaction: discord.Interaction):
-    await interaction.response.send_message(f"🟢 稼働中 (Ping: {round(client.latency * 1000)}ms)", ephemeral=True)
 
 @client.tree.command(name="suggest", description="提案を投稿")
 async def suggest_cmd(interaction: discord.Interaction, suggestion: str):
