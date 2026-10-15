@@ -46,7 +46,7 @@ class MyBot(discord.Client):
         self.auth_role_id = None
         self.server_rule_text = "1. 誹謗中傷や暴言の禁止\n2. スパム・連投行為の禁止\n3. 宣伝行為は専用チャンネルでのみ許可\n4. 運営・管理者の指示に従うこと"
         self.start_time = datetime.datetime.now(datetime.timezone.utc)
-        self.custom_status = None # 手動変更されたステータスを保持
+        self.custom_status = None
 
     async def setup_hook(self):
         await self.tree.sync()
@@ -56,7 +56,6 @@ class MyBot(discord.Client):
     @tasks.loop(seconds=30)
     async def update_status_task(self):
         try:
-            # 手動でカスタム変更されている場合はそれを維持、されていなければローテーション
             if self.custom_status:
                 await self.change_presence(activity=self.custom_status)
                 return
@@ -88,12 +87,14 @@ client = MyBot()
 async def on_ready():
     print(f"Logged in as {client.user} (ID: {client.user.id})")
 
-# スパム検知 & 自動タイムアウト
+# ==========================================
+# スパム検知・自動削除・タイムアウト (TO)
+# ==========================================
 @client.event
 async def on_message(message: discord.Message):
+    # Bot自身やDM、管理者のメッセージは除外
     if message.author.bot or not message.guild:
         return
-
     if message.author.guild_permissions.administrator:
         return
 
@@ -103,33 +104,40 @@ async def on_message(message: discord.Message):
     if user_id not in client.user_message_timestamps:
         client.user_message_timestamps[user_id] = []
 
+    # 5秒以内のメッセージ履歴を抽出
     timestamps = client.user_message_timestamps[user_id]
     timestamps = [t for t in timestamps if (now - t).total_seconds() < 5]
     timestamps.append(now)
     client.user_message_timestamps[user_id] = timestamps
 
+    # 5秒以内に4回以上投稿された場合をスパム（連投）とみなす
     if len(timestamps) >= 4:
         try:
+            # 1. 該当メッセージの自動削除
             await message.delete()
-            duration = datetime.timedelta(minutes=10)
-            await message.author.timeout(duration, reason="自動スパム検知によるタイムアウト")
             
+            # 2. 10分間のタイムアウト(TO)の付与
+            duration = datetime.timedelta(minutes=10)
+            await message.author.timeout(duration, reason="自動スパム検知による連投規制")
+            
+            # 3. 警告通知（全員に表示し、15秒後に自動消去）
             embed = discord.Embed(
-                title="⚠️ スパム検知によるタイムアウト",
-                description=f"{message.author.mention} 様を短時間での連投（スパム行為）のため **10分間タイムアウト** しました。\n誤検知の場合は管理者が `/moderation untimeout` で解除できます。",
+                title="⚠️ スパム検知（自動規制）",
+                description=f"{message.author.mention} 様が短時間に大量のメッセージを投稿したため、メッセージを**自動削除**し、**10分間のタイムアウト（TO）**を実行しました。\n\n※誤検知の場合は管理者が `/moderation untimeout` で解除できます。",
                 color=discord.Color.red()
             )
             await message.channel.send(embed=embed, delete_after=15)
+            
+            # 履歴をクリア
             client.user_message_timestamps[user_id] = []
         except Exception as e:
-            print(f"スパム対処中にエラーが発生しました: {e}")
+            print(f"スパム処理中にエラーが発生しました: {e}")
 
 # ==========================================
 # 各種コマンド群
 # ==========================================
 
-# --- 新規追加：プレイ中ステータス変更コマンド (/status-change) ---
-@client.tree.command(name="status-change", description="Botのプレイ中（アクティビティ）を手動で変更する(管理者)")
+@client.tree.command(name="status-change", description="Botのプレイ中ステータスを手動で変更する(管理者)")
 @app_commands.checks.has_permissions(administrator=True)
 @app_commands.choices(activity_type=[
     app_commands.Choice(name="プレイ中 (Playing)", value="playing"),
@@ -151,9 +159,8 @@ async def status_change_cmd(interaction: discord.Interaction, activity_type: str
 
     client.custom_status = act
     await client.change_presence(activity=act)
-    await interaction.response.send_message(f"✨ Botのステータスを変更しました：**{activity_type} / {text}**", ephemeral=True)
+    await interaction.response.send_message(f"✨ Botのステータスを変更しました：**{activity_type} / {text}**")
 
-# --- ステータス確認コマンド (/status) ---
 @client.tree.command(name="status", description="Botのシステム稼働状況やPingを詳細に表示する")
 async def status_cmd(interaction: discord.Interaction):
     latency = round(client.latency * 1000)
@@ -171,11 +178,10 @@ async def status_cmd(interaction: discord.Interaction):
     embed.add_field(name="応答速度 (Ping)", value=f"`{latency} ms`", inline=True)
     embed.add_field(name="導入サーバー数", value=f"`{len(client.guilds)}` サーバー", inline=True)
     embed.add_field(name="連続稼働時間 (Uptime)", value=f"`{uptime_str}`", inline=False)
-    embed.set_footer(text="ステータスやプレイ中は自動更新されています")
+    embed.set_footer(text=f"実行者: {interaction.user.display_name}")
     
-    await interaction.response.send_message(embed=embed, ephemeral=True)
+    await interaction.response.send_message(embed=embed)
 
-# --- サーバー情報表示コマンド (/server) ---
 @client.tree.command(name="server", description="現在のサーバーの情報を表示する")
 async def server_info_cmd(interaction: discord.Interaction):
     guild = interaction.guild
@@ -191,9 +197,8 @@ async def server_info_cmd(interaction: discord.Interaction):
     embed.add_field(name="サーバーブースト", value=f"Level {guild.premium_tier} ({guild.premium_subscription_count} ブースト)", inline=True)
     embed.add_field(name="サーバー作成日", value=guild.created_at.strftime('%Y/%m/%d %H:%M'), inline=False)
     
-    await interaction.response.send_message(embed=embed, ephemeral=True)
+    await interaction.response.send_message(embed=embed)
 
-# --- 便利な単体便利コマンド ---
 @client.tree.command(name="poll", description="簡易アンケートを作成する")
 async def poll_cmd(interaction: discord.Interaction, question: str, option1: str, option2: str, option3: str = None, option4: str = None):
     options = [option1, option2]
@@ -208,7 +213,7 @@ async def poll_cmd(interaction: discord.Interaction, question: str, option1: str
     embed = discord.Embed(title="📊 アンケート投票", description=desc, color=discord.Color.blurple())
     embed.set_footer(text=f"投票作成者: {interaction.user.display_name}")
     
-    await interaction.response.send_message("✨ アンケートを作成しました！", ephemeral=True)
+    await interaction.response.send_message("✨ アンケートを作成しました！")
     msg = await interaction.channel.send(embed=embed)
     for i in range(len(options)):
         await msg.add_reaction(emojis[i])
@@ -219,9 +224,9 @@ async def clear_cmd(interaction: discord.Interaction, count: int):
     if count < 1 or count > 100:
         await interaction.response.send_message("❌ 削除数は1から100の間で指定してください。", ephemeral=True)
         return
-    await interaction.response.defer(ephemeral=True)
+    await interaction.response.defer()
     deleted = await interaction.channel.purge(limit=count)
-    await interaction.followup.send(f"🗑️ {len(deleted)} 件のメッセージを削除しました。", ephemeral=True)
+    await interaction.followup.send(f"🗑️ {len(deleted)} 件のメッセージを削除しました。")
 
 @client.tree.command(name="userinfo", description="指定したユーザーの情報を表示する")
 async def userinfo_cmd(interaction: discord.Interaction, member: discord.Member = None):
@@ -237,7 +242,7 @@ async def userinfo_cmd(interaction: discord.Interaction, member: discord.Member 
     embed.add_field(name="アカウント作成日", value=target.created_at.strftime('%Y/%m/%d %H:%M'), inline=False)
     embed.add_field(name=f"保有ロール ({len(roles)}個)", value=roles_str, inline=False)
     
-    await interaction.response.send_message(embed=embed, ephemeral=True)
+    await interaction.response.send_message(embed=embed)
 
 # --- 固定メッセージコマンド (/pin-message) ---
 pin_group = app_commands.Group(name="pin-message", description="固定メッセージ管理")
@@ -250,7 +255,7 @@ async def pin_message_create(interaction: discord.Interaction, channel: discord.
         embed = discord.Embed(title="📌 重要なお知らせ", description=formatted_content, color=discord.Color.blue())
         msg = await channel.send(embed=embed)
         await msg.pin(reason="固定メッセージコマンドによるピン留め")
-        await interaction.response.send_message(f"✨ {channel.mention} にメッセージを送信し、ピン留めしました。", ephemeral=True)
+        await interaction.response.send_message(f"✨ {channel.mention} にメッセージを送信し、ピン留めしました。")
     except Exception as e:
         await interaction.response.send_message(f"❌ 固定メッセージの作成に失敗しました: {e}", ephemeral=True)
 
@@ -262,13 +267,13 @@ rule_group = app_commands.Group(name="rule", description="サーバーのルー�
 @rule_group.command(name="show", description="サーバーのルールを表示")
 async def rule_show(interaction: discord.Interaction):
     embed = discord.Embed(title="📜 サーバー利用ルール", description=client.server_rule_text, color=discord.Color.blue())
-    await interaction.response.send_message(embed=embed, ephemeral=True)
+    await interaction.response.send_message(embed=embed)
 
 @rule_group.command(name="set", description="ルールを設定・更新(管理者)")
 @app_commands.checks.has_permissions(administrator=True)
 async def rule_set(interaction: discord.Interaction, content: str):
     client.server_rule_text = content.replace("\\n", "\n")
-    await interaction.response.send_message("✅ サー바ールールを更新しました。", ephemeral=True)
+    await interaction.response.send_message("✅ サー바ールールを更新しました。")
 
 @rule_group.command(name="panel", description="ルールパネルをチャンネルに設置(管理者)")
 @app_commands.checks.has_permissions(administrator=True)
@@ -276,7 +281,7 @@ async def rule_panel(interaction: discord.Interaction):
     embed = discord.Embed(title="📜 サーバー利用ルール", description=client.server_rule_text, color=discord.Color.gold())
     embed.set_footer(text="ルールを守って楽しく利用しましょう！")
     await interaction.channel.send(embed=embed)
-    await interaction.response.send_message("✨ ルールパネルを設置しました。", ephemeral=True)
+    await interaction.response.send_message("✨ ルールパネルを設置しました。")
 
 client.tree.add_command(rule_group)
 
@@ -286,46 +291,46 @@ ad_group = app_commands.Group(name="ad", description="広告管理")
 @ad_group.command(name="approve", description="広告申請を承認(管理者)")
 @app_commands.checks.has_permissions(administrator=True)
 async def ad_approve(interaction: discord.Interaction, ad_id: str):
-    await interaction.response.send_message(f"✅ 広告ID: `{ad_id}` の申請を承認しました。", ephemeral=True)
+    await interaction.response.send_message(f"✅ 広告ID: `{ad_id}` の申請を承認しました。")
 
 @ad_group.command(name="delete", description="広告を削除(管理者)")
 @app_commands.checks.has_permissions(administrator=True)
 async def ad_delete(interaction: discord.Interaction, ad_id: str):
-    await interaction.response.send_message(f"🗑️ 広告ID: `{ad_id}` を削除しました。", ephemeral=True)
+    await interaction.response.send_message(f"🗑️ 広告ID: `{ad_id}` を削除しました。")
 
 @ad_group.command(name="list", description="広告一覧を確認")
 async def ad_list(interaction: discord.Interaction):
     embed = discord.Embed(title="📢 広告一覧", description="現在登録されている広告のステータス一覧です。", color=discord.Color.blue())
     embed.add_field(name="[ID: 001]", value="ステータス: 承認済み / 掲載中", inline=False)
     embed.add_field(name="[ID: 002]", value="ステータス: 審査待ち", inline=False)
-    await interaction.response.send_message(embed=embed, ephemeral=True)
+    await interaction.response.send_message(embed=embed)
 
 @ad_group.command(name="panel", description="広告申請パネルを設置(管理者)")
 @app_commands.checks.has_permissions(administrator=True)
 async def ad_panel(interaction: discord.Interaction):
     embed = discord.Embed(title="📢 広告掲載のご案内", description="下のボタンから広告の申請を行ってください。", color=discord.Color.green())
     await interaction.channel.send(embed=embed)
-    await interaction.response.send_message("✨ 広告申請パネルを設置しました。", ephemeral=True)
+    await interaction.response.send_message("✨ 広告申請パネルを設置しました。")
 
 @ad_group.command(name="post", description="承認済み広告を手動投稿(管理者)")
 @app_commands.checks.has_permissions(administrator=True)
 async def ad_post(interaction: discord.Interaction, ad_id: str):
-    await interaction.response.send_message(f"🚀 広告ID: `{ad_id}` を手動投稿しました。", ephemeral=True)
+    await interaction.response.send_message(f"🚀 広告ID: `{ad_id}` を手動投稿しました。")
 
 @ad_group.command(name="reject", description="広告申請を却下(管理者)")
 @app_commands.checks.has_permissions(administrator=True)
 async def ad_reject(interaction: discord.Interaction, ad_id: str, reason: str = "理由なし"):
-    await interaction.response.send_message(f"❌ 広告ID: `{ad_id}` の申請を却下しました。\n理由: {reason}", ephemeral=True)
+    await interaction.response.send_message(f"❌ 広告ID: `{ad_id}` の申請を却下しました。\n理由: {reason}")
 
 @ad_group.command(name="schedule", description="広告の自動投稿を設定(管理者)")
 @app_commands.checks.has_permissions(administrator=True)
 async def ad_schedule(interaction: discord.Interaction, interval_hours: int):
-    await interaction.response.send_message(f"⏰ 広告の自動投稿間隔を {interval_hours} 時間毎に設定しました。", ephemeral=True)
+    await interaction.response.send_message(f"⏰ 広告の自動投稿間隔を {interval_hours} 時間毎に設定しました。")
 
 @ad_group.command(name="stop", description="広告掲載·自動投稿を停止(管理者)")
 @app_commands.checks.has_permissions(administrator=True)
 async def ad_stop(interaction: discord.Interaction):
-    await interaction.response.send_message("🛑 広告の掲載および自動投稿を停止しました。", ephemeral=True)
+    await interaction.response.send_message("🛑 広告の掲載および自動投稿を停止しました。")
 
 client.tree.add_command(ad_group)
 
@@ -361,19 +366,19 @@ async def auth_panel(interaction: discord.Interaction):
     embed = discord.Embed(title="🔒 サーバー認証", description="下のボタンを押して認証を完了してください。", color=discord.Color.gold())
     view = AuthVerifyView()
     await interaction.channel.send(embed=embed, view=view)
-    await interaction.response.send_message("✨ 認証ボタン付きパネルを設置しました。", ephemeral=True)
+    await interaction.response.send_message("✨ 認証ボタン付きパネルを設置しました。")
 
 @auth_group.command(name="setup", description="既存ロールを認証ロールに設定")
 @app_commands.checks.has_permissions(administrator=True)
 async def auth_setup(interaction: discord.Interaction, role: discord.Role):
     client.auth_role_id = role.id
-    await interaction.response.send_message(f"⚙️ 認証ロールを {role.mention} に設定しました。", ephemeral=True)
+    await interaction.response.send_message(f"⚙️ 認証ロールを {role.mention} に設定しました。")
 
 @auth_group.command(name="toggle", description="認証ON/OFF")
 @app_commands.checks.has_permissions(administrator=True)
 async def auth_toggle(interaction: discord.Interaction, state: bool):
     status = "ON" if state else "OFF"
-    await interaction.response.send_message(f"🔄 認証システムを **{status}** に切り替えました。", ephemeral=True)
+    await interaction.response.send_message(f"🔄 認証システムを **{status}** に切り替えました。")
 
 client.tree.add_command(auth_group)
 
@@ -382,18 +387,18 @@ automod_group = app_commands.Group(name="automod", description="自動モデレ�
 @automod_group.command(name="add", description="禁止ワードルールを追加")
 @app_commands.checks.has_permissions(administrator=True)
 async def automod_add(interaction: discord.Interaction, word: str):
-    await interaction.response.send_message(f"➕ 禁止ワード `{word}` を追加しました。", ephemeral=True)
+    await interaction.response.send_message(f"➕ 禁止ワード `{word}` を追加しました。")
 @automod_group.command(name="list", description="登録済みルールを確認")
 async def automod_list(interaction: discord.Interaction):
-    await interaction.response.send_message("📋 登録済み禁止ワード:\n- `NGワード1`", ephemeral=True)
+    await interaction.response.send_message("📋 登録済み禁止ワード:\n- `NGワード1`")
 @automod_group.command(name="remove", description="ルールIDを指定して削除")
 @app_commands.checks.has_permissions(administrator=True)
 async def automod_remove(interaction: discord.Interaction, rule_id: str):
-    await interaction.response.send_message(f"🗑️ ルールID `{rule_id}` を削除しました。", ephemeral=True)
+    await interaction.response.send_message(f"🗑️ ルールID `{rule_id}` を削除しました。")
 @automod_group.command(name="toggle", description="ルールの有効/無効を切り替え")
 @app_commands.checks.has_permissions(administrator=True)
 async def automod_toggle(interaction: discord.Interaction, rule_id: str):
-    await interaction.response.send_message(f"🔄 ルールID `{rule_id}` の有効/無効を切り替えました。", ephemeral=True)
+    await interaction.response.send_message(f"🔄 ルールID `{rule_id}` の有効/無効を切り替えました。")
 client.tree.add_command(automod_group)
 
 # --- モデレーション管理 (/moderation) ---
@@ -401,22 +406,22 @@ moderation_group = app_commands.Group(name="moderation", description="モデレ�
 @moderation_group.command(name="cases", description="最近のAutoMod検知ケースを確認")
 @app_commands.checks.has_permissions(administrator=True)
 async def moderation_cases(interaction: discord.Interaction):
-    await interaction.response.send_message("📊 最近の検知履歴はありません。", ephemeral=True)
+    await interaction.response.send_message("📊 最近の検知履歴はありません。")
 @moderation_group.command(name="setup", description="検知パネルを送る運営専用チャンネルを設定")
 @app_commands.checks.has_permissions(administrator=True)
 async def moderation_setup(interaction: discord.Interaction, channel: discord.TextChannel):
-    await interaction.response.send_message(f"🔧 運営専用チャンネルを {channel.mention} に設定しました。", ephemeral=True)
+    await interaction.response.send_message(f"🔧 運営専用チャンネルを {channel.mention} に設定しました。")
 @moderation_group.command(name="toggle", description="スパム検知ON/OFF(管理者)")
 @app_commands.checks.has_permissions(administrator=True)
 async def moderation_toggle(interaction: discord.Interaction, state: bool):
     status = "ON" if state else "OFF"
-    await interaction.response.send_message(f"🛡️ スパム検知を **{status}** にしました。", ephemeral=True)
+    await interaction.response.send_message(f"🛡️ スパム検知を **{status}** にしました。")
 @moderation_group.command(name="untimeout", description="メンバーのタイムアウトを解除(管理者)")
 @app_commands.checks.has_permissions(administrator=True)
 async def moderation_untimeout(interaction: discord.Interaction, member: discord.Member):
     try:
         await member.timeout(None, reason="管理者によるタイムアウト解除")
-        await interaction.response.send_message(f"✅ {member.mention} のタイムアウトを解除しました。", ephemeral=True)
+        await interaction.response.send_message(f"✅ {member.mention} のタイムアウトを解除しました。")
     except Exception as e:
         await interaction.response.send_message(f"❌ 解除に失敗しました: {e}", ephemeral=True)
 client.tree.add_command(moderation_group)
@@ -427,15 +432,15 @@ channel_group = app_commands.Group(name="channel", description="チャンネル�
 @app_commands.checks.has_permissions(administrator=True)
 async def channel_create(interaction: discord.Interaction, name: str):
     new_channel = await interaction.guild.create_text_channel(name=name)
-    await interaction.response.send_message(f"📁 チャンネル {new_channel.mention} を作成しました。", ephemeral=True)
+    await interaction.response.send_message(f"📁 チャンネル {new_channel.mention} を作成しました。")
 @channel_group.command(name="permissions", description="チャンネルのロール別権限を設定")
 @app_commands.checks.has_permissions(administrator=True)
 async def channel_permissions(interaction: discord.Interaction, role: discord.Role):
-    await interaction.response.send_message(f"🔐 {role.mention} の権限を設定しました。", ephemeral=True)
+    await interaction.response.send_message(f"🔐 {role.mention} の権限を設定しました。")
 @channel_group.command(name="reset_permissions", description="ロール別の権限上書きをリセット")
 @app_commands.checks.has_permissions(administrator=True)
 async def channel_reset_permissions(interaction: discord.Interaction):
-    await interaction.response.send_message("🔄 権限上書きをリセットしました。", ephemeral=True)
+    await interaction.response.send_message("🔄 権限上書きをリセットしました。")
 client.tree.add_command(channel_group)
 
 # --- Ping監視 (/ping) ---
@@ -443,25 +448,25 @@ ping_group = app_commands.Group(name="ping", description="監視コマンド")
 @ping_group.command(name="add", description="監視URLを登録(60秒間隔)")
 @app_commands.checks.has_permissions(administrator=True)
 async def ping_add(interaction: discord.Interaction, url: str):
-    await interaction.response.send_message(f"🌐 監視対象URL `{url}` を登録しました。", ephemeral=True)
+    await interaction.response.send_message(f"🌐 監視対象URL `{url}` を登録しました。")
 @ping_group.command(name="list", description="監視対象一覧")
 async def ping_list(interaction: discord.Interaction):
-    await interaction.response.send_message("📋 監視対象: `https://example.com`", ephemeral=True)
+    await interaction.response.send_message("📋 監視対象: `https://example.com`")
 @ping_group.command(name="remove", description="監視対象を削除")
 @app_commands.checks.has_permissions(administrator=True)
 async def ping_remove(interaction: discord.Interaction, url: str):
-    await interaction.response.send_message(f"🗑️ `{url}` の監視を解除しました。", ephemeral=True)
+    await interaction.response.send_message(f"🗑️ `{url}` の監視を解除しました。")
 @ping_group.command(name="resume", description="監視再開")
 @app_commands.checks.has_permissions(administrator=True)
 async def ping_resume(interaction: discord.Interaction):
-    await interaction.response.send_message("▶️ 監視を再開しました。", ephemeral=True)
+    await interaction.response.send_message("▶️ 監視を再開しました。")
 @ping_group.command(name="status", description="監視結果を表示")
 async def ping_status(interaction: discord.Interaction):
-    await interaction.response.send_message("🟢 正常稼働中", ephemeral=True)
+    await interaction.response.send_message("🟢 正常稼働中")
 @ping_group.command(name="stop", description="監視停止")
 @app_commands.checks.has_permissions(administrator=True)
 async def ping_stop(interaction: discord.Interaction):
-    await interaction.response.send_message("⏹️ 監視を停止しました。", ephemeral=True)
+    await interaction.response.send_message("⏹️ 監視を停止しました。")
 client.tree.add_command(ping_group)
 
 # --- サポート・チケット系 (/support-status, /ticket) ---
@@ -471,11 +476,11 @@ support_group = app_commands.Group(name="support-status", description="対応状
 async def support_panel(interaction: discord.Interaction):
     embed = discord.Embed(title="🎧 サポート対応状況", description="**受付中**", color=discord.Color.teal())
     await interaction.channel.send(embed=embed)
-    await interaction.response.send_message("✨ パネルを設置しました。", ephemeral=True)
+    await interaction.response.send_message("✨ パネルを設置しました。")
 @support_group.command(name="set", description="対応状況を変更(管理者)")
 @app_commands.checks.has_permissions(administrator=True)
 async def support_set(interaction: discord.Interaction, status: str):
-    await interaction.response.send_message(f"🔄 ステータスを **{status}** に変更しました。", ephemeral=True)
+    await interaction.response.send_message(f"🔄 ステータスを **{status}** に変更しました。")
 client.tree.add_command(support_group)
 
 class TicketCloseView(View):
@@ -486,7 +491,7 @@ class TicketCloseView(View):
         if not interaction.user.guild_permissions.administrator:
             await interaction.response.send_message("❌ 管理者のみ閉じることができます。", ephemeral=True)
             return
-        await interaction.response.send_message("🔒 5秒後にチャンネルが削除されます。", ephemeral=True)
+        await interaction.response.send_message("🔒 5秒後にチャンネルが削除されます。")
         await asyncio.sleep(5)
         try:
             await interaction.channel.delete()
@@ -518,7 +523,7 @@ ticket_group = app_commands.Group(name="ticket", description="チケット機能
 async def ticket_panel(interaction: discord.Interaction):
     embed = discord.Embed(title="🎫 お問い合わせチケット", description="下のボタンを押してください。", color=discord.Color.blurple())
     await interaction.channel.send(embed=embed, view=TicketPanelView())
-    await interaction.response.send_message("✨ パネルを設置しました。", ephemeral=True)
+    await interaction.response.send_message("✨ パネルを設置しました。")
 client.tree.add_command(ticket_group)
 
 # --- 便利ツールパネル等 ---
@@ -530,7 +535,7 @@ class UtilityPanelView(View):
         await interaction.response.send_message("📖 /help コマンドをご参照ください。", ephemeral=True)
     @discord.ui.button(label="稼働状況", style=discord.ButtonStyle.success, emoji="🟢")
     async def s_btn(self, interaction: discord.Interaction, button: Button):
-        await interaction.response.send_message(f"🟢 正常稼働中 (Ping: {round(client.latency * 1000)}ms)", ephemeral=True)
+        await interaction.response.send_message(f"🟢 正常稼働中 (Ping: {round(client.latency * 1000)}ms)")
     @discord.ui.button(label="提案を投稿", style=discord.ButtonStyle.secondary, emoji="💡")
     async def p_btn(self, interaction: discord.Interaction, button: Button):
         await interaction.response.send_message("💡 /suggest コマンドをご利用ください。", ephemeral=True)
@@ -539,7 +544,7 @@ class UtilityPanelView(View):
         if not interaction.user.guild_permissions.administrator:
             await interaction.response.send_message("❌ 管理者専用です。", ephemeral=True)
             return
-        await interaction.response.send_message("⚙️ 管理メニュー", ephemeral=True)
+        await interaction.response.send_message("⚙️ 管理メニュー")
     @discord.ui.button(label="選挙を作成", style=discord.ButtonStyle.success, emoji="🗳️")
     async def e_btn(self, interaction: discord.Interaction, button: Button):
         if not interaction.user.guild_permissions.administrator:
@@ -548,42 +553,42 @@ class UtilityPanelView(View):
         msg = await interaction.channel.send(embed=discord.Embed(title="🗳️ 選挙投票受付", color=discord.Color.gold()))
         await msg.add_reaction("🇦")
         await msg.add_reaction("🇧")
-        await interaction.response.send_message("✨ 選挙パネルを作成しました。", ephemeral=True)
+        await interaction.response.send_message("✨ 選挙パネルを作成しました。")
 
 @client.tree.command(name="event", description="イベント告知を作成(管理者)")
 @app_commands.checks.has_permissions(administrator=True)
 async def event_create(interaction: discord.Interaction, title: str, description: str):
     embed = discord.Embed(title=f"🎉 {title}", description=description, color=discord.Color.orange())
     await interaction.channel.send(embed=embed)
-    await interaction.response.send_message("✨ 作成しました。", ephemeral=True)
+    await interaction.response.send_message("✨ 作成しました。")
 
 @client.tree.command(name="help", description="Botの使い方")
 async def help_cmd(interaction: discord.Interaction):
-    await interaction.response.send_message("📖 コマンド一覧をご参照ください。", ephemeral=True)
+    await interaction.response.send_message("📖 コマンド一覧をご参照ください。")
 
 @client.tree.command(name="panel", description="便利ツールパネルを設置(管理者)")
 @app_commands.checks.has_permissions(administrator=True)
 async def panel_cmd(interaction: discord.Interaction):
     embed = discord.Embed(title="🛠️ 便利ツールパネル", description="ボタンからアクセスできます。", color=discord.Color.dark_gray())
     await interaction.channel.send(embed=embed, view=UtilityPanelView())
-    await interaction.response.send_message("✨ パネルを設置しました。", ephemeral=True)
+    await interaction.response.send_message("✨ パネルを設置しました。")
 
 @client.tree.command(name="reset", description="リセット")
 @app_commands.checks.has_permissions(administrator=True)
 async def reset_cmd(interaction: discord.Interaction):
-    await interaction.response.send_message("⚠️ 無効化されています。", ephemeral=True)
+    await interaction.response.send_message("⚠️ 無効化されています。")
 
 @client.tree.command(name="suggest", description="提案を投稿")
 async def suggest_cmd(interaction: discord.Interaction, suggestion: str):
     msg = await interaction.channel.send(embed=discord.Embed(title="💡 提案", description=suggestion, color=discord.Color.blurple()))
     await msg.add_reaction("👍")
     await msg.add_reaction("👎")
-    await interaction.response.send_message("✨ 投稿しました。", ephemeral=True)
+    await interaction.response.send_message("✨ 投稿しました。")
 
 @client.tree.command(name="welcome", description="歓迎チャンネルを設定(管理者)")
 @app_commands.checks.has_permissions(administrator=True)
 async def welcome_setup(interaction: discord.Interaction, channel: discord.TextChannel):
-    await interaction.response.send_message(f"👋 設定しました: {channel.mention}", ephemeral=True)
+    await interaction.response.send_message(f"👋 設定しました: {channel.mention}")
 
 # 起動
 token = os.environ.get("DISCORD_TOKEN")
