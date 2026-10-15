@@ -11,8 +11,9 @@ class MyBot(discord.Client):
         intents.message_content = True
         super().__init__(intents=intents)
         self.tree = app_commands.CommandTree(self)
-        # スパム検知用メモリキャッシュ { user_id: [msg_timestamp, ...] }
         self.user_message_timestamps = {}
+        # 認証ロールIDを保持する変数（初期値はNone、/auth setupで設定されます）
+        self.auth_role_id = None
 
     async def setup_hook(self):
         await self.tree.sync()
@@ -32,7 +33,6 @@ async def on_message(message: discord.Message):
     if message.author.bot or not message.guild:
         return
 
-    # 管理者権限を持つユーザーは自動TOから除外（誤判定防止）
     if message.author.guild_permissions.administrator:
         return
 
@@ -43,17 +43,13 @@ async def on_message(message: discord.Message):
         client.user_message_timestamps[user_id] = []
 
     timestamps = client.user_message_timestamps[user_id]
-    # 5秒以上前のタイムスタンプを削除
     timestamps = [t for t in timestamps if (now - t).total_seconds() < 5]
     timestamps.append(now)
     client.user_message_timestamps[user_id] = timestamps
 
-    # 5秒以内に4回以上発言した場合はスパムと判定
     if len(timestamps) >= 4:
         try:
-            # メッセージの削除
             await message.delete()
-            # 10分間のタイムアウト(TO)を実施
             duration = datetime.timedelta(minutes=10)
             await message.author.timeout(duration, reason="自動スパム検知によるタイムアウト")
             
@@ -63,7 +59,6 @@ async def on_message(message: discord.Message):
                 color=discord.Color.red()
             )
             await message.channel.send(embed=embed, delete_after=15)
-            # 連続処理防止のためタイムスタンプクリア
             client.user_message_timestamps[user_id] = []
         except Exception as e:
             print(f"スパム対処中にエラーが発生しました: {e}")
@@ -120,19 +115,52 @@ async def ad_stop(interaction: discord.Interaction):
 client.tree.add_command(ad_group)
 
 # ==========================================
-# 2. 認証系 (/auth)
+# 2. 認証系 (/auth) （ボタン付き）
 # ==========================================
+
+class AuthVerifyView(View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="認証する", style=discord.ButtonStyle.green, emoji="✅", custom_id="auth_verify_button")
+    async def verify_button(self, interaction: discord.Interaction, button: Button):
+        if not client.auth_role_id:
+            await interaction.response.send_message("❌ 認証ロールがまだ設定されていません。管理者に `/auth setup` を実行してもらってください。", ephemeral=True)
+            return
+        
+        role = interaction.guild.get_role(client.auth_role_id)
+        if not role:
+            await interaction.response.send_message("❌ 設定された認証ロールが見つかりませんでした。", ephemeral=True)
+            return
+
+        try:
+            if role in interaction.user.roles:
+                await interaction.user.remove_roles(role)
+                await interaction.response.send_message("🔄 認証を解除しました。", ephemeral=True)
+            else:
+                await interaction.user.add_roles(role)
+                await interaction.response.send_message(f"✅ 認証が完了しました！ {role.mention} を付与しました。", ephemeral=True)
+        except Exception as e:
+            await interaction.response.send_message(f"❌ ロールの付与/解除に失敗しました: {e}", ephemeral=True)
+
 auth_group = app_commands.Group(name="auth", description="認証機能")
 
 @auth_group.command(name="panel", description="認証パネルを設置")
+@app_commands.checks.has_permissions(administrator=True)
 async def auth_panel(interaction: discord.Interaction):
-    embed = discord.Embed(title="🔒 サーバー認証", description="下のボタンを押して認証を完了してください。", color=discord.Color.gold())
-    await interaction.channel.send(embed=embed)
-    await interaction.response.send_message("✨ 認証パネルを設置しました。", ephemeral=True)
+    embed = discord.Embed(
+        title="🔒 サーバー認証", 
+        description="下の **「認証する」** ボタンを押すと、サーバーの利用ロールが即座に付与されます！", 
+        color=discord.Color.gold()
+    )
+    view = AuthVerifyView()
+    await interaction.channel.send(embed=embed, view=view)
+    await interaction.response.send_message("✨ 認証ボタン付きパネルを設置しました。", ephemeral=True)
 
-@auth_group.command(name="setup", description="既存ロールIDを認証ロールに設定")
+@auth_group.command(name="setup", description="既存ロールを認証ロールに設定")
 @app_commands.checks.has_permissions(administrator=True)
 async def auth_setup(interaction: discord.Interaction, role: discord.Role):
+    client.auth_role_id = role.id
     await interaction.response.send_message(f"⚙️ 認証ロールを {role.mention} に設定しました。", ephemeral=True)
 
 @auth_group.command(name="toggle", description="認証ON/OFF")
