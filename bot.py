@@ -44,10 +44,10 @@ class MyBot(discord.Client):
         self.tree = app_commands.CommandTree(self)
         self.user_message_timestamps = {}
         
-        # ユーザーごとのモデレーション対応履歴
+        # ユーザーごとのモデレーション対応履歴 {user_id: {"warn_count": int, "last_penalty": str}}
         self.user_moderation_records = {}
 
-        # ユーザーごとの対応状況ステータス
+        # ユーザーごとの対応状況ステータス {user_id: {"status": str, "note": str}}
         self.user_availability_status = {}
 
         self.auth_role_id = None
@@ -110,7 +110,7 @@ class MyBot(discord.Client):
         embed = discord.Embed(title="🟢 Bot システム稼働状況 (1秒間隔更新中)", color=discord.Color.green())
         embed.add_field(name="接続状態", value="正常稼働中 (Online)", inline=True)
         embed.add_field(name="応答速度 (Ping)", value=f"`{latency} ms`", inline=True)
-        embed.add_field(name="導入サーバー数", value=f"`{len(client.guilds)}` サーバー", inline=True)
+        embed.add_field(name="導入サーバー数", value=f"`{len(self.guilds)}` サーバー", inline=True)
         embed.add_field(name="連続稼働時間 (Uptime)", value=f"`{uptime_str}`", inline=False)
         embed.set_footer(text=f"リアルタイム更新中 ({now.strftime('%H:%M:%S')})")
 
@@ -285,7 +285,7 @@ class ManagementSelect(Select):
             guild = interaction.guild
             await interaction.response.send_message(f"🏰 サーバー名: **{guild.name}** / メンバー数: **{guild.member_count}人** / オーナー: {guild.owner.mention}", ephemeral=True)
         elif val == "rules":
-            embed = discord.Embed(title="📜 サーバールール", description=client.server_rule_text, color=discord.Color.gold())
+            embed = discord.Embed(title="📜 サー바ールール", description=client.server_rule_text, color=discord.Color.gold())
             await interaction.response.send_message(embed=embed, ephemeral=True)
         elif val == "status":
             latency = round(client.latency * 1000)
@@ -382,7 +382,6 @@ async def web_auth_cmd(interaction: discord.Interaction, mode: str):
             await interaction.response.send_message("❌ 現在Web認証システムは無効化されています。", ephemeral=True)
             return
 
-        # WebサーバーのベースURLを取得
         port = os.environ.get("PORT", 10000)
         auth_url = f"http://localhost:{port}/"
 
