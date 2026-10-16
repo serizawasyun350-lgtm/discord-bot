@@ -1,6 +1,7 @@
 import os
 import asyncio
 import datetime
+import random
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import discord
@@ -49,6 +50,9 @@ class MyBot(discord.Client):
 
         # ユーザーごとの対応状況ステータス {user_id: {"status": str, "note": str}}
         self.user_availability_status = {}
+
+        # 選挙ごとの立候補者データ {election_id: [{"user_id": int, "name": str, "pr": str}]}
+        self.election_candidates = {}
 
         self.auth_role_id = None
         self.web_auth_enabled = True
@@ -110,7 +114,7 @@ class MyBot(discord.Client):
         embed = discord.Embed(title="🟢 Bot システム稼働状況 (1秒間隔更新中)", color=discord.Color.green())
         embed.add_field(name="接続状態", value="正常稼働中 (Online)", inline=True)
         embed.add_field(name="応答速度 (Ping)", value=f"`{latency} ms`", inline=True)
-        embed.add_field(name="導入サーバー数", value=f"`{len(self.guilds)}` サーバー", inline=True)
+        embed.add_field(name="導入サーバー数", value=f"`{len(client.guilds)}` サーバー", inline=True)
         embed.add_field(name="連続稼働時間 (Uptime)", value=f"`{uptime_str}`", inline=False)
         embed.set_footer(text=f"リアルタイム更新中 ({now.strftime('%H:%M:%S')})")
 
@@ -244,7 +248,10 @@ class ElectionModal(Modal):
         msg = await interaction.channel.send(embed=embed)
         await msg.add_reaction("🇦")
         await msg.add_reaction("🇧")
-        await interaction.response.send_message(f"✨ 「{self.election_type}」の選挙パネルを作成しました！", ephemeral=True)
+        
+        client.election_candidates[msg.id] = []
+        
+        await interaction.response.send_message(f"✨ 「{self.election_type}」の選挙パネルを作成しました！（選挙ID: `{msg.id}`）\n立候補する場合は `/rikkouho` でこのIDを指定してください。", ephemeral=True)
 
 class ElectionTypeSelect(Select):
     def __init__(self):
@@ -263,6 +270,44 @@ class ElectionTypeSelectView(View):
     def __init__(self):
         super().__init__(timeout=60)
         self.add_item(ElectionTypeSelect())
+
+class CaptchaModal(Modal):
+    def __init__(self, num1: int, num2: int, correct_answer: int):
+        super().__init__(title="🔢 キャプチャ認証（計算テスト）")
+        self.correct_answer = correct_answer
+        self.answer_input.label = f"次の計算結果を入力してください: {num1} + {num2} = ?"
+
+    answer_input = TextInput(label="答えの数値", placeholder="半角数字で入力", required=True, max_length=5)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            user_val = int(self.answer_input.value.strip())
+        except ValueError:
+            await interaction.response.send_message("❌ 半角の数字で正しく入力してください。", ephemeral=True)
+            return
+
+        if user_val != self.correct_answer:
+            await interaction.response.send_message("❌ 計算の答えが違います。もう一度認証ボタンからやり直してください。", ephemeral=True)
+            return
+
+        if not client.auth_role_id:
+            await interaction.response.send_message("❌ 認証ロールがまだ設定されていません。", ephemeral=True)
+            return
+
+        role = interaction.guild.get_role(client.auth_role_id)
+        if not role:
+            await interaction.response.send_message("❌ 指定された認証ロールが見つかりませんでした。", ephemeral=True)
+            return
+
+        try:
+            if role in interaction.user.roles:
+                await interaction.user.remove_roles(role)
+                await interaction.response.send_message("🔄 認証を解除しました。", ephemeral=True)
+            else:
+                await interaction.user.add_roles(role)
+                await interaction.response.send_message(f"✅ キャプチャ認証に成功しました！ {role.mention} を付与しました。", ephemeral=True)
+        except Exception as e:
+            await interaction.response.send_message(f"❌ 権限エラーが発生しました: {e}", ephemeral=True)
 
 class ManagementSelect(Select):
     def __init__(self):
@@ -285,7 +330,7 @@ class ManagementSelect(Select):
             guild = interaction.guild
             await interaction.response.send_message(f"🏰 サーバー名: **{guild.name}** / メンバー数: **{guild.member_count}人** / オーナー: {guild.owner.mention}", ephemeral=True)
         elif val == "rules":
-            embed = discord.Embed(title="📜 サー바ールール", description=client.server_rule_text, color=discord.Color.gold())
+            embed = discord.Embed(title="📜 サーバールール", description=client.server_rule_text, color=discord.Color.gold())
             await interaction.response.send_message(embed=embed, ephemeral=True)
         elif val == "status":
             latency = round(client.latency * 1000)
@@ -315,6 +360,7 @@ class UtilityPanelView(View):
             "• `/status` : リアルタイム稼働状況を表示（1秒間隔更新）\n"
             "• `/user_status` : メンバーの対応可能状態を設定・確認\n"
             "• `/web_auth` : Web認証リンクの発行・管理\n"
+            "• `/rikkouho` : 選挙に立候補する\n"
             "• `/server` : サーバーの情報を表示\n"
             "• `/poll` : 簡易アンケートを作成\n"
             "• `/userinfo` : ユーザー情報を確認\n"
@@ -364,13 +410,13 @@ class UtilityPanelView(View):
 # 各種スラッシュコマンド群
 # ==========================================
 
-# --- Web認証コマンド (/web_auth) ---
+# --- Web認証リンク自動発行コマンド (/web_auth) ---
 class WebAuthLinkView(View):
     def __init__(self, auth_url: str):
         super().__init__(timeout=180)
-        self.add_item(Button(label="🌐 認証ページを開く", url=auth_url, style=discord.ButtonStyle.link))
+        self.add_item(Button(label="🌐 Web認証ページを開く", url=auth_url, style=discord.ButtonStyle.link))
 
-@client.tree.command(name="web_auth", description="Web認証の案内表示およびシステム管理")
+@client.tree.command(name="web_auth", description="Web認証用URLの自動発行およびシステム管理")
 @app_commands.choices(mode=[
     app_commands.Choice(name="🌐 Web認証リンクを発行する", value="get_link"),
     app_commands.Choice(name="⚙️ Web認証を有効化する (管理者)", value="enable"),
@@ -383,11 +429,13 @@ async def web_auth_cmd(interaction: discord.Interaction, mode: str):
             return
 
         port = os.environ.get("PORT", 10000)
-        auth_url = f"http://localhost:{port}/"
+        # Render等の外部URLがあればそちらを優先、なければローカルホスト
+        external_url = os.environ.get("RENDER_EXTERNAL_URL", f"http://localhost:{port}")
+        auth_url = f"{external_url}/"
 
         embed = discord.Embed(
             title="🌐 Web認証ポータル",
-            description="以下のボタンをクリックしてWeb認証ページにアクセスし、認証手続きを完了してください。",
+            description="以下のボタンをクリックしてWeb認証ページへアクセスし、手続きを進めてください。",
             color=discord.Color.blue()
         )
         view = WebAuthLinkView(auth_url=auth_url)
@@ -401,6 +449,42 @@ async def web_auth_cmd(interaction: discord.Interaction, mode: str):
         client.web_auth_enabled = (mode == "enable")
         status_str = "🟢 有効" if client.web_auth_enabled else "🔴 無効"
         await interaction.response.send_message(f"⚙️ Web認証システムを **{status_str}** に変更しました。", ephemeral=True)
+
+
+# --- 選挙立候補コマンド (/rikkouho) ---
+@client.tree.command(name="rikkouho", description="開催中の選挙に立候補する")
+async def rikkouho_cmd(interaction: discord.Interaction, election_message_id: str, candidate_name: str, pr_text: str):
+    try:
+        msg_id = int(election_message_id)
+    except ValueError:
+        await interaction.response.send_message("❌ 選挙メッセージIDは半角数字で正しく入力してください。", ephemeral=True)
+        return
+
+    if msg_id not in client.election_candidates:
+        client.election_candidates[msg_id] = []
+
+    client.election_candidates[msg_id].append({
+        "user_id": interaction.user.id,
+        "name": candidate_name,
+        "pr": pr_text
+    })
+
+    try:
+        channel = interaction.channel
+        msg = await channel.fetch_message(msg_id)
+        
+        candidates_list = client.election_candidates[msg_id]
+        candidates_str = "\n".join([f"👤 **{c['name']}** ({interaction.guild.get_member(c['user_id']).mention if interaction.guild.get_member(c['user_id']) else '不明'}): {c['pr']}" for c in candidates_list])
+
+        old_embed = msg.embeds[0]
+        new_embed = discord.Embed(title=old_embed.title, description=old_embed.description + f"\n\n**【立候補者一覧】**\n{candidates_str}", color=old_embed.color)
+        if old_embed.footer:
+            new_embed.set_footer(text=old_embed.footer.text)
+            
+        await msg.edit(embed=new_embed)
+        await interaction.response.send_message(f"✨ 選挙（ID: `{msg_id}`）への立候補を受け付けました！", ephemeral=True)
+    except Exception as e:
+        await interaction.response.send_message(f"✨ 立候補を受け付けましたが、メッセージの自動更新に失敗しました: {e}", ephemeral=True)
 
 
 # --- ユーザーの対応可能状態コマンド (/user_status) ---
@@ -639,7 +723,7 @@ async def rule_show(interaction: discord.Interaction):
 @app_commands.checks.has_permissions(administrator=True)
 async def rule_set(interaction: discord.Interaction, content: str):
     client.server_rule_text = content.replace("\\n", "\n")
-    await interaction.response.send_message("✅ サーバールールを更新しました。", ephemeral=True)
+    await interaction.response.send_message("✅ サー바ールールを更新しました。", ephemeral=True)
 
 @rule_group.command(name="panel", description="ルールパネルをチャンネルに設置(管理者)")
 @app_commands.checks.has_permissions(administrator=True)
@@ -651,39 +735,31 @@ async def rule_panel(interaction: discord.Interaction):
 
 client.tree.add_command(rule_group)
 
-# --- 認証系 (/auth) ---
+# --- キャプチャ（計算）認証つきパネル系 (/auth) ---
 class AuthVerifyView(View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="認証する", style=discord.ButtonStyle.green, emoji="✅", custom_id="auth_verify_button")
+    @discord.ui.button(label="認証する (計算テスト)", style=discord.ButtonStyle.green, emoji="🔢", custom_id="auth_verify_button")
     async def verify_button(self, interaction: discord.Interaction, button: Button):
-        if not client.auth_role_id:
-            await interaction.response.send_message("❌ 認証ロールがまだ設定されていません。", ephemeral=True)
-            return
-        role = interaction.guild.get_role(client.auth_role_id)
-        if not role:
-            await interaction.response.send_message("❌ 認証ロールが見つかりませんでした。", ephemeral=True)
-            return
-        try:
-            if role in interaction.user.roles:
-                await interaction.user.remove_roles(role)
-                await interaction.response.send_message("🔄 認証を解除しました。", ephemeral=True)
-            else:
-                await interaction.user.add_roles(role)
-                await interaction.response.send_message(f"✅ 認証が完了しました！ {role.mention} を付与しました。", ephemeral=True)
-        except Exception as e:
-            await interaction.response.send_message(f"❌ エラーが発生しました: {e}", ephemeral=True)
+        num1 = random.randint(1, 9)
+        num2 = random.randint(1, 9)
+        ans = num1 + num2
+        await interaction.response.send_modal(CaptchaModal(num1=num1, num2=num2, correct_answer=ans))
 
 auth_group = app_commands.Group(name="auth", description="認証機能")
 
-@auth_group.command(name="panel", description="認証パネルを設置")
+@auth_group.command(name="panel", description="計算認証ボタン付きパネルを設置")
 @app_commands.checks.has_permissions(administrator=True)
 async def auth_panel(interaction: discord.Interaction):
-    embed = discord.Embed(title="🔒 サーバー認証", description="下のボタンを押して認証を完了してください。", color=discord.Color.gold())
+    embed = discord.Embed(
+        title="🔒 サーバー認証（キャプチャテスト）",
+        description="下の **「認証する (計算テスト)」** ボタンを押すと、画面に簡単な計算問題が表示されます。正解するとロールが付与されます！",
+        color=discord.Color.gold()
+    )
     view = AuthVerifyView()
     await interaction.channel.send(embed=embed, view=view)
-    await interaction.response.send_message("✨ 認証ボタン付きパネルを設置しました。", ephemeral=True)
+    await interaction.response.send_message("✨ 計算認証ボタン付きパネルを設置しました。", ephemeral=True)
 
 @auth_group.command(name="setup", description="既存ロールを認証ロールに設定")
 @app_commands.checks.has_permissions(administrator=True)
