@@ -271,9 +271,34 @@ class ElectionTypeSelectView(View):
         super().__init__(timeout=60)
         self.add_item(ElectionTypeSelect())
 
+# --- 通常認証ビュー ---
+class NormalAuthView(View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="認証する", style=discord.ButtonStyle.green, emoji="✅", custom_id="normal_auth_button")
+    async def verify_button(self, interaction: discord.Interaction, button: Button):
+        if not client.auth_role_id:
+            await interaction.response.send_message("❌ 認証ロールがまだ設定されていません。", ephemeral=True)
+            return
+        role = interaction.guild.get_role(client.auth_role_id)
+        if not role:
+            await interaction.response.send_message("❌ 認証ロールが見つかりませんでした。", ephemeral=True)
+            return
+        try:
+            if role in interaction.user.roles:
+                await interaction.user.remove_roles(role)
+                await interaction.response.send_message("🔄 認証を解除しました。", ephemeral=True)
+            else:
+                await interaction.user.add_roles(role)
+                await interaction.response.send_message(f"✅ 認証が完了しました！ {role.mention} を付与しました。", ephemeral=True)
+        except Exception as e:
+            await interaction.response.send_message(f"❌ エラーが発生しました: {e}", ephemeral=True)
+
+# --- キャプチャ（計算）認証モーダル ---
 class CaptchaModal(Modal):
     def __init__(self, num1: int, num2: int, correct_answer: int):
-        super().__init__(title="🔢 キャプチャ認証（計算テスト）")
+        super().__init__(title="🔢 計算認証テスト")
         self.correct_answer = correct_answer
         self.answer_input.label = f"次の計算結果を入力してください: {num1} + {num2} = ?"
 
@@ -287,7 +312,7 @@ class CaptchaModal(Modal):
             return
 
         if user_val != self.correct_answer:
-            await interaction.response.send_message("❌ 計算の答えが違います。もう一度認証ボタンからやり直してください。", ephemeral=True)
+            await interaction.response.send_message("❌ 計算の答えが違います。もう一度ボタンからやり直してください。", ephemeral=True)
             return
 
         if not client.auth_role_id:
@@ -296,7 +321,7 @@ class CaptchaModal(Modal):
 
         role = interaction.guild.get_role(client.auth_role_id)
         if not role:
-            await interaction.response.send_message("❌ 指定された認証ロールが見つかりませんでした。", ephemeral=True)
+            await interaction.response.send_message("❌ 認証ロールが見つかりませんでした。", ephemeral=True)
             return
 
         try:
@@ -305,9 +330,21 @@ class CaptchaModal(Modal):
                 await interaction.response.send_message("🔄 認証を解除しました。", ephemeral=True)
             else:
                 await interaction.user.add_roles(role)
-                await interaction.response.send_message(f"✅ キャプチャ認証に成功しました！ {role.mention} を付与しました。", ephemeral=True)
+                await interaction.response.send_message(f"✅ 計算認証に成功しました！ {role.mention} を付与しました。", ephemeral=True)
         except Exception as e:
-            await interaction.response.send_message(f"❌ 権限エラーが発生しました: {e}", ephemeral=True)
+            await interaction.response.send_message(f"❌ エラーが発生しました: {e}", ephemeral=True)
+
+# --- キャプチャ認証ビュー ---
+class CaptchaAuthView(View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="認証する (計算テスト)", style=discord.ButtonStyle.green, emoji="🔢", custom_id="captcha_auth_button")
+    async def verify_button(self, interaction: discord.Interaction, button: Button):
+        num1 = random.randint(1, 9)
+        num2 = random.randint(1, 9)
+        ans = num1 + num2
+        await interaction.response.send_modal(CaptchaModal(num1=num1, num2=num2, correct_answer=ans))
 
 class ManagementSelect(Select):
     def __init__(self):
@@ -330,7 +367,7 @@ class ManagementSelect(Select):
             guild = interaction.guild
             await interaction.response.send_message(f"🏰 サーバー名: **{guild.name}** / メンバー数: **{guild.member_count}人** / オーナー: {guild.owner.mention}", ephemeral=True)
         elif val == "rules":
-            embed = discord.Embed(title="📜 サー바ールール", description=client.server_rule_text, color=discord.Color.gold())
+            embed = discord.Embed(title="📜 サーバールール", description=client.server_rule_text, color=discord.Color.gold())
             await interaction.response.send_message(embed=embed, ephemeral=True)
         elif val == "status":
             latency = round(client.latency * 1000)
@@ -359,6 +396,7 @@ class UtilityPanelView(View):
             "• `/help` : コマンド一覧を表示\n"
             "• `/status` : リアルタイム稼働状況を表示（1秒間隔更新）\n"
             "• `/user_status` : メンバーの対応可能状態を設定・確認\n"
+            "• `/web_auth` : Web認証リンクの発行・管理\n"
             "• `/rikkouho` : 選挙に立候補する\n"
             "• `/dice` : サイコロを振る（1〜6）\n"
             "• `/slot` : スロットマシンで遊ぶ\n"
@@ -368,7 +406,7 @@ class UtilityPanelView(View):
             "• `/poll` : 簡易アンケートを作成\n"
             "• `/userinfo` : ユーザー情報を確認\n"
             "• `/moderation user-status` : ユーザーの違反状況を確認(管理)\n"
-            "• `/auth panel` : 認証ボタンパネルを設置(管理)\n"
+            "• `/auth panel` : 認証ボタンパネルを設置(管理・通常/計算選択可能)\n"
             "• `/ad panel` : ボタン付き広告パネルを設置(管理)\n"
             "• `/clear` : メッセージを一括削除(管理)"
         )
@@ -407,7 +445,7 @@ class UtilityPanelView(View):
 
 
 # ==========================================
-# 各種スラッシュコマンド群（遊べるミニゲーム追加）
+# 各種スラッシュコマンド群
 # ==========================================
 
 @client.tree.command(name="dice", description="サイコロを振る（1〜6）")
@@ -785,31 +823,33 @@ async def rule_panel(interaction: discord.Interaction):
 
 client.tree.add_command(rule_group)
 
-# --- キャプチャ（計算）認証つきパネル系 (/auth) ---
-class AuthVerifyView(View):
-    def __init__(self):
-        super().__init__(timeout=None)
-
-    @discord.ui.button(label="認証する (計算テスト)", style=discord.ButtonStyle.green, emoji="🔢", custom_id="auth_verify_button")
-    async def verify_button(self, interaction: discord.Interaction, button: Button):
-        num1 = random.randint(1, 9)
-        num2 = random.randint(1, 9)
-        ans = num1 + num2
-        await interaction.response.send_modal(CaptchaModal(num1=num1, num2=num2, correct_answer=ans))
-
+# --- 認証系 (/auth) ---
 auth_group = app_commands.Group(name="auth", description="認証機能")
 
-@auth_group.command(name="panel", description="計算認証ボタン付きパネルを設置")
+@auth_group.command(name="panel", description="認証パネルを設置（通常認証か計算認証かを選択可能）")
 @app_commands.checks.has_permissions(administrator=True)
-async def auth_panel(interaction: discord.Interaction):
-    embed = discord.Embed(
-        title="🔒 サーバー認証（キャプチャテスト）",
-        description="下の **「認証する (計算テスト)」** ボタンを押すと、画面に簡単な計算問題が表示されます。正解するとロールが付与されます！",
-        color=discord.Color.gold()
-    )
-    view = AuthVerifyView()
+@app_commands.choices(auth_type=[
+    app_commands.Choice(name="通常認証 (ボタンクリックで即付与)", value="normal"),
+    app_commands.Choice(name="計算認証 (計算テストをクリアして付与)", value="captcha"),
+])
+async def auth_panel(interaction: discord.Interaction, auth_type: str):
+    if auth_type == "normal":
+        embed = discord.Embed(
+            title="🔒 サーバー認証",
+            description="下の **「認証する」** ボタンを押すと、ロールが即座に付与されます。",
+            color=discord.Color.gold()
+        )
+        view = NormalAuthView()
+    else:
+        embed = discord.Embed(
+            title="🔒 サーバー認証（計算テスト）",
+            description="下の **「認証する (計算テスト)」** ボタンを押すと、簡単な計算問題が表示されます。正解するとロールが付与されます！",
+            color=discord.Color.gold()
+        )
+        view = CaptchaAuthView()
+
     await interaction.channel.send(embed=embed, view=view)
-    await interaction.response.send_message("✨ 計算認証ボタン付きパネルを設置しました。", ephemeral=True)
+    await interaction.response.send_message(f"✨ 認証パネル（種類: **{auth_type}**）を設置しました。", ephemeral=True)
 
 @auth_group.command(name="setup", description="既存ロールを認証ロールに設定")
 @app_commands.checks.has_permissions(administrator=True)
