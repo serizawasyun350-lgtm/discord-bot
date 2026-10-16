@@ -330,7 +330,7 @@ class ManagementSelect(Select):
             guild = interaction.guild
             await interaction.response.send_message(f"🏰 サーバー名: **{guild.name}** / メンバー数: **{guild.member_count}人** / オーナー: {guild.owner.mention}", ephemeral=True)
         elif val == "rules":
-            embed = discord.Embed(title="📜 サーバールール", description=client.server_rule_text, color=discord.Color.gold())
+            embed = discord.Embed(title="📜 サー바ールール", description=client.server_rule_text, color=discord.Color.gold())
             await interaction.response.send_message(embed=embed, ephemeral=True)
         elif val == "status":
             latency = round(client.latency * 1000)
@@ -359,18 +359,18 @@ class UtilityPanelView(View):
             "• `/help` : コマンド一覧を表示\n"
             "• `/status` : リアルタイム稼働状況を表示（1秒間隔更新）\n"
             "• `/user_status` : メンバーの対応可能状態を設定・確認\n"
-            "• `/web_auth` : Web認証リンクの発行・管理\n"
             "• `/rikkouho` : 選挙に立候補する\n"
+            "• `/dice` : サイコロを振る（1〜6）\n"
+            "• `/slot` : スロットマシンで遊ぶ\n"
+            "• `/omikuji` : 本日の運勢を占う\n"
+            "• `/coin` : コイントス（表か裏）\n"
             "• `/server` : サーバーの情報を表示\n"
             "• `/poll` : 簡易アンケートを作成\n"
             "• `/userinfo` : ユーザー情報を確認\n"
-            "• `/moderation user-status` : ユーザーの過去の違反・規制状況を確認(管理)\n"
-            "• `/ticket panel` : チケットパネルを設置(管理)\n"
+            "• `/moderation user-status` : ユーザーの違反状況を確認(管理)\n"
             "• `/auth panel` : 認証ボタンパネルを設置(管理)\n"
             "• `/ad panel` : ボタン付き広告パネルを設置(管理)\n"
-            "• `/pin-message create` : 自動下移動付き固定メッセージを作成(管理)\n"
-            "• `/clear` : メッセージを一括削除(管理)\n"
-            "• `/status-change` : プレイ中ステータスを変更(管理)"
+            "• `/clear` : メッセージを一括削除(管理)"
         )
         embed = discord.Embed(title="📖 ヘルプ＆コマンドガイド", description=help_text, color=discord.Color.purple())
         await interaction.response.send_message(embed=embed, ephemeral=True)
@@ -407,8 +407,59 @@ class UtilityPanelView(View):
 
 
 # ==========================================
-# 各種スラッシュコマンド群
+# 各種スラッシュコマンド群（遊べるミニゲーム追加）
 # ==========================================
+
+@client.tree.command(name="dice", description="サイコロを振る（1〜6）")
+async def dice_cmd(interaction: discord.Interaction):
+    result = random.randint(1, 6)
+    embed = discord.Embed(title="🎲 サイコロ勝負", description=f"{interaction.user.mention} さんがサイコロを振りました！\n\n出目: **{result}** 🎯", color=discord.Color.blue())
+    await interaction.response.send_message(embed=embed)
+
+@client.tree.command(name="slot", description="スロットマシンで遊ぶ")
+async def slot_cmd(interaction: discord.Interaction):
+    fruits = ["🍎", "🍊", "🍋", "🍇", "🍓", "🍒", "⭐", "💎"]
+    s1 = random.choice(fruits)
+    s2 = random.choice(fruits)
+    s3 = random.choice(fruits)
+    
+    if s1 == s2 == s3:
+        result_text = "🎉 **大当たり！パーフェクトビンゴ！** 🎉"
+        color = discord.Color.gold()
+    elif s1 == s2 or s2 == s3 or s1 == s3:
+        result_text = "✨ **おしい！2つ揃いました！** ✨"
+        color = discord.Color.green()
+    else:
+        result_text = "💦 **ハズレ！また挑戦してね！**"
+        color = discord.Color.red()
+
+    embed = discord.Embed(title="🎰 スロットマシン", description=f"{interaction.user.mention} さんの結果\n\n| {s1} | {s2} | {s3} |\n\n{result_text}", color=color)
+    await interaction.response.send_message(embed=embed)
+
+@client.tree.command(name="omikuji", description="今日の運勢を占うおみくじ")
+async def omikuji_cmd(interaction: discord.Interaction):
+    fortunes = ["大吉 🌟", "中吉 ✨", "小吉 🍀", "吉 👍", "末吉 🪄", "凶 💧"]
+    result = random.choice(fortunes)
+    embed = discord.Embed(title="⛩️ おみくじ", description=f"{interaction.user.mention} さんの今日の運勢は...\n\n👉 **{result}**", color=discord.Color.purple())
+    await interaction.response.send_message(embed=embed)
+
+@client.tree.command(name="coin", description="コイントス（表か裏か）")
+@app_commands.choices(choice=[
+    app_commands.Choice(name="表 (Heads)", value="表"),
+    app_commands.Choice(name="裏 (Tails)", value="裏"),
+])
+async def coin_cmd(interaction: discord.Interaction, choice: str):
+    result = random.choice(["表", "裏"])
+    if choice == result:
+        res_text = f"🎉 当たり！あなたの予想通り **【{result}】** でした！"
+        color = discord.Color.green()
+    else:
+        res_text = f"残念！結果は **【{result}】** でした..."
+        color = discord.Color.red()
+
+    embed = discord.Embed(title="🪙 コイントス勝負", description=f"あなたの予想: {choice}\n\n{res_text}", color=color)
+    await interaction.response.send_message(embed=embed)
+
 
 # --- Web認証リンク自動発行コマンド (/web_auth) ---
 class WebAuthLinkView(View):
@@ -429,7 +480,6 @@ async def web_auth_cmd(interaction: discord.Interaction, mode: str):
             return
 
         port = os.environ.get("PORT", 10000)
-        # Render等の外部URLがあればそちらを優先、なければローカルホスト
         external_url = os.environ.get("RENDER_EXTERNAL_URL", f"http://localhost:{port}")
         auth_url = f"{external_url}/"
 
@@ -723,7 +773,7 @@ async def rule_show(interaction: discord.Interaction):
 @app_commands.checks.has_permissions(administrator=True)
 async def rule_set(interaction: discord.Interaction, content: str):
     client.server_rule_text = content.replace("\\n", "\n")
-    await interaction.response.send_message("✅ サー바ールールを更新しました。", ephemeral=True)
+    await interaction.response.send_message("✅ サーバールールを更新しました。", ephemeral=True)
 
 @rule_group.command(name="panel", description="ルールパネルをチャンネルに設置(管理者)")
 @app_commands.checks.has_permissions(administrator=True)
