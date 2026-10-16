@@ -134,7 +134,7 @@ async def on_ready():
     print(f"Logged in as {client.user} (ID: {client.user.id})")
 
 # ==========================================
-# メッセージ受信イベント（スパム検知 & 固定メッセージ追従機能）
+# メッセージ受信イベント
 # ==========================================
 @client.event
 async def on_message(message: discord.Message):
@@ -190,10 +190,9 @@ async def on_message(message: discord.Message):
         client.sticky_messages[channel_id]["message_id"] = new_msg.id
 
 # ==========================================
-# UIコンポーネント & モーダル定義（チケット機能を含む）
+# UIコンポーネント & モーダル定義
 # ==========================================
 
-# チケット作成ボタンビュー
 class TicketCreateView(View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -221,7 +220,6 @@ class TicketCreateView(View):
         await ticket_channel.send(embed=embed, view=close_view)
         await interaction.response.send_message(f"✨ チケットを作成しました: {ticket_channel.mention}", ephemeral=True)
 
-# チケット閉じるボタンビュー
 class TicketCloseView(View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -235,8 +233,6 @@ class TicketCloseView(View):
         except Exception:
             pass
 
-
-# ⚙️ 11個のボタンを搭載した管理者専用コントロールパネル
 class AdminControlPanelView(View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -303,7 +299,7 @@ class AdminControlPanelView(View):
     async def btn_10(self, interaction: discord.Interaction, button: Button):
         if not interaction.user.guild_permissions.administrator:
             return await interaction.response.send_message("❌ 管理者専用です。", ephemeral=True)
-        await interaction.response.send_message("🤖 オールインワンDiscord Bot v3.6", ephemeral=True)
+        await interaction.response.send_message("🤖 オールインワンDiscord Bot v3.7", ephemeral=True)
 
     @discord.ui.button(label="11. メンテナンス案内", style=discord.ButtonStyle.danger, row=3, custom_id="adm_btn_11")
     async def btn_11(self, interaction: discord.Interaction, button: Button):
@@ -313,7 +309,7 @@ class AdminControlPanelView(View):
 
 
 # ==========================================
-# 🚀 チケットパネル設置コマンド & 各種コマンド群
+# 🚀 各種コマンド群
 # ==========================================
 
 @client.tree.command(name="ticket_panel", description="サポートチケット作成パネルを設置する(管理者)")
@@ -397,7 +393,8 @@ async def gacha_cmd(interaction: discord.Interaction):
 
 @client.tree.command(name="luckycolor", description="今日のラッキーカラーを占う")
 async def color_cmd(interaction: discord.Interaction):
-    await interaction.response.send_message(f"🎨 今日のラッキーカラー: **{random.choice(['赤', '青', '緑', '黄色', '紫', 'ピンク', '黒', '白', 'ゴールド']}**")
+    colors = ['赤', '青', '緑', '黄色', '紫', 'ピンク', '黒', '白', 'ゴールド']
+    await interaction.response.send_message(f"🎨 今日のラッキーカラー: **{random.choice(colors)}**")
 
 @client.tree.command(name="genpass", description="安全なランダムパスワードを生成する")
 async def genpass_cmd(interaction: discord.Interaction):
