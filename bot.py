@@ -40,7 +40,6 @@ class MyBot(discord.Client):
     def __init__(self):
         intents = discord.Intents.default()
         intents.message_content = True
-        intents.voice_states = True # 音声チャンネルの状態取得に必要
         super().__init__(intents=intents)
         self.tree = app_commands.CommandTree(self)
         self.user_message_timestamps = {}
@@ -278,8 +277,6 @@ class UtilityPanelView(View):
             "• `/server` : サーバーの情報を表示\n"
             "• `/poll` : 簡易アンケートを作成\n"
             "• `/userinfo` : ユーザー情報を確認\n"
-            "• `/join` : ボイスチャンネルに接続\n"
-            "• `/leave` : ボイスチャンネルから退出\n"
             "• `/ticket panel` : チケットパネルを設置(管理)\n"
             "• `/auth panel` : 認証ボタンパネルを設置(管理)\n"
             "• `/ad panel` : ボタン付き広告パネルを設置(管理)\n"
@@ -319,30 +316,6 @@ class UtilityPanelView(View):
 # 各種スラッシュコマンド群
 # ==========================================
 
-# --- 音声チャンネル接続・退出コマンド (/join, /leave) ---
-@client.tree.command(name="join", description="あなたが参加しているボイスチャンネルにBotを接続する")
-async def join_cmd(interaction: discord.Interaction):
-    if not interaction.user.voice or not interaction.user.voice.channel:
-        await interaction.response.send_message("❌ まずボイスチャンネルに参加してください。", ephemeral=True)
-        return
-    
-    channel = interaction.user.voice.channel
-    if interaction.guild.voice_client is not None:
-        await interaction.guild.voice_client.move_to(channel)
-    else:
-        await channel.connect()
-    
-    await interaction.response.send_message(f"🔊 ボイスチャンネル **{channel.name}** に接続しました！")
-
-@client.tree.command(name="leave", description="ボイスチャンネルからBotを退出させる")
-async def leave_cmd(interaction: discord.Interaction):
-    if interaction.guild.voice_client is not None:
-        await interaction.guild.voice_client.disconnect()
-        await interaction.response.send_message("👋 ボイスチャンネルから退出しました。")
-    else:
-        await interaction.response.send_message("❌ Botはどのボイスチャンネルにも参加していません。", ephemeral=True)
-
-
 # --- 自動下移動付き固定メッセージコマンド ---
 pin_group = app_commands.Group(name="pin-message", description="固定メッセージ管理")
 
@@ -358,7 +331,7 @@ async def pin_message_create(interaction: discord.Interaction, channel: discord.
             "content": formatted_content,
             "message_id": msg.id
         }
-        await interaction.response.send_message(f"✨ {channel.mention} に自動追従（最下部維持）の固定メッセージを設置しました。")
+        await interaction.response.send_message(f"✨ {channel.mention} に自動追従（最下部維持）の固定メッセージを設置しました。", ephemeral=True)
     except Exception as e:
         await interaction.response.send_message(f"❌ 作成に失敗しました: {e}", ephemeral=True)
 
@@ -377,7 +350,7 @@ async def ad_panel(interaction: discord.Interaction):
     )
     view = AdPanelView()
     await interaction.channel.send(embed=embed, view=view)
-    await interaction.response.send_message("✨ ボタン付き広告申請パネルを設置しました。")
+    await interaction.response.send_message("✨ ボタン付き広告申請パネルを設置しました。", ephemeral=True)
 
 client.tree.add_command(ad_group)
 
@@ -426,7 +399,7 @@ async def status_change_cmd(interaction: discord.Interaction, activity_type: str
 
     client.custom_status = act
     await client.change_presence(activity=act)
-    await interaction.response.send_message(f"✨ Botのステータスを変更しました：**{activity_type} / {text}**")
+    await interaction.response.send_message(f"✨ Botのステータスを変更しました：**{activity_type} / {text}**", ephemeral=True)
 
 @client.tree.command(name="server", description="現在のサーバーの情報を表示する")
 async def server_info_cmd(interaction: discord.Interaction):
@@ -459,7 +432,7 @@ async def poll_cmd(interaction: discord.Interaction, question: str, option1: str
     embed = discord.Embed(title="📊 アンケート投票", description=desc, color=discord.Color.blurple())
     embed.set_footer(text=f"投票作成者: {interaction.user.display_name}")
     
-    await interaction.response.send_message("✨ アンケートを作成しました！")
+    await interaction.response.send_message("✨ アンケートを作成しました！", ephemeral=True)
     msg = await interaction.channel.send(embed=embed)
     for i in range(len(options)):
         await msg.add_reaction(emojis[i])
@@ -470,9 +443,9 @@ async def clear_cmd(interaction: discord.Interaction, count: int):
     if count < 1 or count > 100:
         await interaction.response.send_message("❌ 削除数は1から100の間で指定してください。", ephemeral=True)
         return
-    await interaction.response.defer()
+    await interaction.response.defer(ephemeral=True)
     deleted = await interaction.channel.purge(limit=count)
-    await interaction.followup.send(f"🗑️ {len(deleted)} 件のメッセージを削除しました。")
+    await interaction.followup.send(f"🗑️ {len(deleted)} 件のメッセージを削除しました。", ephemeral=True)
 
 @client.tree.command(name="userinfo", description="指定したユーザーの情報を表示する")
 async def userinfo_cmd(interaction: discord.Interaction, member: discord.Member = None):
@@ -488,7 +461,7 @@ async def userinfo_cmd(interaction: discord.Interaction, member: discord.Member 
     embed.add_field(name="アカウント作成日", value=target.created_at.strftime('%Y/%m/%d %H:%M'), inline=False)
     embed.add_field(name=f"保有ロール ({len(roles)}個)", value=roles_str, inline=False)
     
-    await interaction.response.send_message(embed=embed)
+    await interaction.response.send_message(embed=embed, ephemeral=True)
 
 # --- ルール管理コマンド (/rule) ---
 rule_group = app_commands.Group(name="rule", description="サーバーのルール管理")
@@ -502,7 +475,7 @@ async def rule_show(interaction: discord.Interaction):
 @app_commands.checks.has_permissions(administrator=True)
 async def rule_set(interaction: discord.Interaction, content: str):
     client.server_rule_text = content.replace("\\n", "\n")
-    await interaction.response.send_message("✅ サー바ールールを更新しました。")
+    await interaction.response.send_message("✅ サーバールールを更新しました。", ephemeral=True)
 
 @rule_group.command(name="panel", description="ルールパネルをチャンネルに設置(管理者)")
 @app_commands.checks.has_permissions(administrator=True)
@@ -510,7 +483,7 @@ async def rule_panel(interaction: discord.Interaction):
     embed = discord.Embed(title="📜 サーバー利用ルール", description=client.server_rule_text, color=discord.Color.gold())
     embed.set_footer(text="ルールを守って楽しく利用しましょう！")
     await interaction.channel.send(embed=embed)
-    await interaction.response.send_message("✨ ルールパネルを設置しました。")
+    await interaction.response.send_message("✨ ルールパネルを設置しました。", ephemeral=True)
 
 client.tree.add_command(rule_group)
 
@@ -546,19 +519,19 @@ async def auth_panel(interaction: discord.Interaction):
     embed = discord.Embed(title="🔒 サーバー認証", description="下のボタンを押して認証を完了してください。", color=discord.Color.gold())
     view = AuthVerifyView()
     await interaction.channel.send(embed=embed, view=view)
-    await interaction.response.send_message("✨ 認証ボタン付きパネルを設置しました。")
+    await interaction.response.send_message("✨ 認証ボタン付きパネルを設置しました。", ephemeral=True)
 
 @auth_group.command(name="setup", description="既存ロールを認証ロールに設定")
 @app_commands.checks.has_permissions(administrator=True)
 async def auth_setup(interaction: discord.Interaction, role: discord.Role):
     client.auth_role_id = role.id
-    await interaction.response.send_message(f"⚙️ 認証ロールを {role.mention} に設定しました。")
+    await interaction.response.send_message(f"⚙️ 認証ロールを {role.mention} に設定しました。", ephemeral=True)
 
 @auth_group.command(name="toggle", description="認証ON/OFF")
 @app_commands.checks.has_permissions(administrator=True)
 async def auth_toggle(interaction: discord.Interaction, state: bool):
     status = "ON" if state else "OFF"
-    await interaction.response.send_message(f"🔄 認証システムを **{status}** に切り替えました。")
+    await interaction.response.send_message(f"🔄 認証システムを **{status}** に切り替えました。", ephemeral=True)
 
 client.tree.add_command(auth_group)
 
@@ -575,28 +548,28 @@ async def panel_cmd(interaction: discord.Interaction):
 async def event_create(interaction: discord.Interaction, title: str, description: str):
     embed = discord.Embed(title=f"🎉 {title}", description=description, color=discord.Color.orange())
     await interaction.channel.send(embed=embed)
-    await interaction.response.send_message("✨ 作成しました。")
+    await interaction.response.send_message("✨ 作成しました。", ephemeral=True)
 
 @client.tree.command(name="help", description="Botの使い方")
 async def help_cmd(interaction: discord.Interaction):
-    await interaction.response.send_message("📖 コマンド一覧をご参照ください。")
+    await interaction.response.send_message("📖 コマンド一覧をご参照ください。", ephemeral=True)
 
 @client.tree.command(name="reset", description="リセット")
 @app_commands.checks.has_permissions(administrator=True)
 async def reset_cmd(interaction: discord.Interaction):
-    await interaction.response.send_message("⚠️ 無効化されています。")
+    await interaction.response.send_message("⚠️ 無効化されています。", ephemeral=True)
 
 @client.tree.command(name="suggest", description="提案を投稿")
 async def suggest_cmd(interaction: discord.Interaction, suggestion: str):
     msg = await interaction.channel.send(embed=discord.Embed(title="💡 提案", description=suggestion, color=discord.Color.blurple()))
     await msg.add_reaction("👍")
     await msg.add_reaction("👎")
-    await interaction.response.send_message("✨ 投稿しました。")
+    await interaction.response.send_message("✨ 投稿しました。", ephemeral=True)
 
 @client.tree.command(name="welcome", description="歓迎チャンネルを設定(管理者)")
 @app_commands.checks.has_permissions(administrator=True)
 async def welcome_setup(interaction: discord.Interaction, channel: discord.TextChannel):
-    await interaction.response.send_message(f"👋 設定しました: {channel.mention}")
+    await interaction.response.send_message(f"👋 設定しました: {channel.mention}", ephemeral=True)
 
 # 起動
 token = os.environ.get("DISCORD_TOKEN")
