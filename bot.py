@@ -43,6 +43,13 @@ class MyBot(discord.Client):
         super().__init__(intents=intents)
         self.tree = app_commands.CommandTree(self)
         self.user_message_timestamps = {}
+        
+        # ユーザーごとのモデレーション対応履歴 {user_id: {"warn_count": int, "last_penalty": str}}
+        self.user_moderation_records = {}
+
+        # ユーザーごとの対応状況ステータス {user_id: {"status": str, "note": str}}
+        self.user_availability_status = {}
+
         self.auth_role_id = None
         self.server_rule_text = "1. 誹謗中傷や暴言の禁止\n2. スパム・連投行為の禁止\n3. 宣伝行為は専用チャンネルでのみ許可\n4. 運営・管理者の指示に従うこと"
         self.start_time = datetime.datetime.now(datetime.timezone.utc)
@@ -57,7 +64,7 @@ class MyBot(discord.Client):
         self.update_status_task.start()
         self.refresh_status_messages_task.start()
 
-    @tasks.loop(seconds=3)
+    @tasks.loop(seconds=30)
     async def update_status_task(self):
         try:
             if self.custom_status:
@@ -99,10 +106,10 @@ class MyBot(discord.Client):
         days, hours = divmod(hours, 24)
         uptime_str = f"{days}日 {hours}時間 {minutes}分 {seconds}秒" if days > 0 else f"{hours}時間 {minutes}分 {seconds}秒"
 
-        embed = discord.Embed(title="🟢 Bot システム稼働状況 ", color=discord.Color.green())
+        embed = discord.Embed(title="🟢 Bot システム稼働状況 (1秒間隔更新中)", color=discord.Color.green())
         embed.add_field(name="接続状態", value="正常稼働中 (Online)", inline=True)
         embed.add_field(name="応答速度 (Ping)", value=f"`{latency} ms`", inline=True)
-        embed.add_field(name="導入サーバー数", value=f"`{len(self.guilds)}` サーバー", inline=True)
+        embed.add_field(name="導入サーバー数", value=f"`{len(client.guilds)}` サーバー", inline=True)
         embed.add_field(name="連続稼働時間 (Uptime)", value=f"`{uptime_str}`", inline=False)
         embed.set_footer(text=f"リアルタイム更新中 ({now.strftime('%H:%M:%S')})")
 
@@ -152,6 +159,12 @@ async def on_message(message: discord.Message):
                 duration = datetime.timedelta(minutes=10)
                 await message.author.timeout(duration, reason="自動スパム検知による連投規制")
                 
+                if user_id not in client.user_moderation_records:
+                    client.user_moderation_records[user_id] = {"warn_count": 0, "last_penalty": "なし"}
+                
+                client.user_moderation_records[user_id]["warn_count"] += 1
+                client.user_moderation_records[user_id]["last_penalty"] = f"10分間タイムアウト ({now.strftime('%Y/%m/%d %H:%M')})"
+
                 embed = discord.Embed(
                     title="⚠️ スパム検知（自動規制）",
                     description=f"{message.author.mention} 様が短時間に大量のメッセージを投稿したため、メッセージを**自動削除**し、**10分間のタイムアウト（TO）**を実行しました。\n\n※誤検知の場合は管理者が `/moderation untimeout` で解除できます。",
@@ -214,21 +227,41 @@ class SuggestionModal(Modal, title="💡 提案を投稿する"):
         await msg.add_reaction("👎")
         await interaction.response.send_message("✨ 提案を投稿しました！", ephemeral=True)
 
-# 選挙タイプ選択・作成用モーダル
-class ElectionModal(Modal, title="🗳️ 選挙を作成する"):
-    election_type = TextInput(label="選挙タイプ (モデレーター / ゲーム / その他)", placeholder="例: モデレーター選挙", required=True, max_length=30)
+class ElectionModal(Modal):
+    def __init__(self, election_type: str):
+        super().__init__(title=f"🗳️ 選挙作成 ({election_type})")
+        self.election_type = election_type
+
     election_title = TextInput(label="選挙のタイトル・テーマ", placeholder="例: 新規モデレーター立候補者の投票", required=True)
     option_a = TextInput(label="選択肢 A", placeholder="例: 候補者 1 / Minecraft", required=True)
     option_b = TextInput(label="選択肢 B", placeholder="例: 候補者 2 / Among Us", required=True)
 
     async def on_submit(self, interaction: discord.Interaction):
         desc = f"**【投票受付中】**\n\n🇦 : {self.option_a.value}\n🇧 : {self.option_b.value}"
-        embed = discord.Embed(title=f"🗳️ [{self.election_type.value}] {self.election_title.value}", description=desc, color=discord.Color.gold())
+        embed = discord.Embed(title=f"🗳️ [{self.election_type}] {self.election_title.value}", description=desc, color=discord.Color.gold())
         embed.set_footer(text=f"主催者: {interaction.user.display_name}")
         msg = await interaction.channel.send(embed=embed)
         await msg.add_reaction("🇦")
         await msg.add_reaction("🇧")
-        await interaction.response.send_message(f"✨ 「{self.election_type.value}」の選挙パネルを作成しました！", ephemeral=True)
+        await interaction.response.send_message(f"✨ 「{self.election_type}」の選挙パネルを作成しました！", ephemeral=True)
+
+class ElectionTypeSelect(Select):
+    def __init__(self):
+        options = [
+            discord.SelectOption(label="モデレーター選挙", description="スタッフやモデレーターを選ぶ投票", emoji="🛡️", value="モデレーター選挙"),
+            discord.SelectOption(label="ゲーム選挙", description="次に遊ぶゲームや企画を決める投票", emoji="🎮", value="ゲーム選挙"),
+            discord.SelectOption(label="一般・その他選挙", description="自由なテーマでの投票・アンケート", emoji="🗳️", value="一般・その他選挙"),
+        ]
+        super().__init__(placeholder="🗳️ 選挙のタイプを選択してください...", min_values=1, max_values=1, options=options)
+
+    async def callback(self, interaction: discord.Interaction):
+        selected_type = self.values[0]
+        await interaction.response.send_modal(ElectionModal(election_type=selected_type))
+
+class ElectionTypeSelectView(View):
+    def __init__(self):
+        super().__init__(timeout=60)
+        self.add_item(ElectionTypeSelect())
 
 class ManagementSelect(Select):
     def __init__(self):
@@ -251,7 +284,7 @@ class ManagementSelect(Select):
             guild = interaction.guild
             await interaction.response.send_message(f"🏰 サーバー名: **{guild.name}** / メンバー数: **{guild.member_count}人** / オーナー: {guild.owner.mention}", ephemeral=True)
         elif val == "rules":
-            embed = discord.Embed(title="📜 サー바ールール", description=client.server_rule_text, color=discord.Color.gold())
+            embed = discord.Embed(title="📜 サーバールール", description=client.server_rule_text, color=discord.Color.gold())
             await interaction.response.send_message(embed=embed, ephemeral=True)
         elif val == "status":
             latency = round(client.latency * 1000)
@@ -272,13 +305,18 @@ class UtilityPanelView(View):
 
     @discord.ui.button(label="ヘルプ", style=discord.ButtonStyle.primary, emoji="📖", custom_id="util_help")
     async def h_btn(self, interaction: discord.Interaction, button: Button):
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("❌ このパネルの操作は管理者のみ許可されています。", ephemeral=True)
+            return
         help_text = (
             "**📖 ボットのコマンド・機能一覧**\n"
             "• `/help` : コマンド一覧を表示\n"
             "• `/status` : リアルタイム稼働状況を表示（1秒間隔更新）\n"
+            "• `/user_status` : メンバーの対応可能状態を設定・確認\n"
             "• `/server` : サーバーの情報を表示\n"
             "• `/poll` : 簡易アンケートを作成\n"
             "• `/userinfo` : ユーザー情報を確認\n"
+            "• `/moderation user-status` : ユーザーの過去の違反・規制状況を確認(管理)\n"
             "• `/ticket panel` : チケットパネルを設置(管理)\n"
             "• `/auth panel` : 認証ボタンパネルを設置(管理)\n"
             "• `/ad panel` : ボタン付き広告パネルを設置(管理)\n"
@@ -291,17 +329,23 @@ class UtilityPanelView(View):
 
     @discord.ui.button(label="稼働状況", style=discord.ButtonStyle.success, emoji="🟢", custom_id="util_status")
     async def s_btn(self, interaction: discord.Interaction, button: Button):
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("❌ このパネルの操作は管理者のみ許可されています。", ephemeral=True)
+            return
         latency = round(client.latency * 1000)
         await interaction.response.send_message(f"🟢 **システム正常稼働中**\n• 応答速度 (Ping): `{latency}ms`\n• 導入サーバー数: `{len(client.guilds)}`", ephemeral=True)
 
     @discord.ui.button(label="提案を投稿", style=discord.ButtonStyle.secondary, emoji="💡", custom_id="util_suggest")
     async def p_btn(self, interaction: discord.Interaction, button: Button):
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("❌ このパネルの操作は管理者のみ許可されています。", ephemeral=True)
+            return
         await interaction.response.send_modal(SuggestionModal())
 
     @discord.ui.button(label="管理", style=discord.ButtonStyle.danger, emoji="⚙️", custom_id="util_manage")
     async def m_btn(self, interaction: discord.Interaction, button: Button):
         if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message("❌ この機能は管理者のみ利用できます。", ephemeral=True)
+            await interaction.response.send_message("❌ このパネルの操作は管理者のみ許可されています。", ephemeral=True)
             return
         embed = discord.Embed(title="⚙️ 管理者専用便利メニュー", description="下のドロップダウンから5つの機能を選択できます。", color=discord.Color.dark_red())
         await interaction.response.send_message(embed=embed, view=ManagementView(), ephemeral=True)
@@ -309,14 +353,91 @@ class UtilityPanelView(View):
     @discord.ui.button(label="選挙を作成", style=discord.ButtonStyle.success, emoji="🗳️", custom_id="util_election")
     async def e_btn(self, interaction: discord.Interaction, button: Button):
         if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message("❌ 選挙の作成は管理者のみ実行できます。", ephemeral=True)
+            await interaction.response.send_message("❌ このパネルの操作は管理者のみ許可されています。", ephemeral=True)
             return
-        await interaction.response.send_modal(ElectionModal())
+        await interaction.response.send_message("🗳️ 作成する選挙のタイプを選択してください：", view=ElectionTypeSelectView(), ephemeral=True)
 
 
 # ==========================================
 # 各種スラッシュコマンド群
 # ==========================================
+
+# --- ユーザーの対応可能状態コマンド (/user_status) ---
+@client.tree.command(name="user_status", description="ユーザーの対応可能状態を確認・設定する")
+@app_commands.choices(action=[
+    app_commands.Choice(name="確認する", value="get"),
+    app_commands.Choice(name="設定・更新する", value="set"),
+])
+@app_commands.choices(status_type=[
+    app_commands.Choice(name="🟢 対応可能 (受付中)", value="対応可能 (受付中)"),
+    app_commands.Choice(name="🟡 多忙 (返信遅れます)", value="多忙 (返信遅れます)"),
+    app_commands.Choice(name="🔴 対応不可 (取り込み中)", value="対応不可 (取り込み中)"),
+])
+async def user_status_cmd(
+    interaction: discord.Interaction,
+    action: str,
+    target_user: discord.Member = None,
+    status_type: str = None,
+    note: str = "特になし"
+):
+    if action == "set":
+        if not status_type:
+            await interaction.response.send_message("❌ 設定する場合は `status_type` を選択してください。", ephemeral=True)
+            return
+        
+        client.user_availability_status[interaction.user.id] = {
+            "status": status_type,
+            "note": note,
+            "updated_at": datetime.datetime.now(datetime.timezone.utc).strftime("%H:%M")
+        }
+        await interaction.response.send_message(f"✨ あなたの対応ステータスを **[{status_type}]** に設定しました！", ephemeral=True)
+
+    elif action == "get":
+        target = target_user or interaction.user
+        data = client.user_availability_status.get(target.id, {"status": "未設定 (通常)", "note": "なし", "updated_at": "---"})
+
+        embed = discord.Embed(title=f"🎧 対応状況: {target.display_name}", color=discord.Color.blue())
+        embed.set_thumbnail(url=target.display_avatar.url)
+        embed.add_field(name="現在のステータス", value=f"**{data['status']}**", inline=False)
+        embed.add_field(name="メモ・備考", value=f"`{data['note']}`", inline=False)
+        embed.add_field(name="最終更新時刻", value=f"`{data['updated_at']}`", inline=False)
+
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
+# --- モデレーション・ユーザー対応状況管理 (/moderation) ---
+moderation_group = app_commands.Group(name="moderation", description="モデレーション管理")
+
+@moderation_group.command(name="user-status", description="指定したユーザーの自動検知・警告などの対応状況を確認(管理者)")
+@app_commands.checks.has_permissions(administrator=True)
+async def moderation_user_status(interaction: discord.Interaction, member: discord.Member):
+    user_id = member.id
+    record = client.user_moderation_records.get(user_id, {"warn_count": 0, "last_penalty": "履歴なし"})
+
+    embed = discord.Embed(title=f"🛡️ ユーザーモデレーション状況: {member.display_name}", color=discord.Color.orange())
+    embed.set_thumbnail(url=member.display_avatar.url)
+    embed.add_field(name="対象ユーザー", value=member.mention, inline=True)
+    embed.add_field(name="ユーザーID", value=f"`{member.id}`", inline=True)
+    embed.add_field(name="スパム検知・警告回数", value=f"**{record['warn_count']} 回**", inline=False)
+    embed.add_field(name="直近の処置内容", value=f"`{record['last_penalty']}`", inline=False)
+    
+    if member.timed_out_until:
+        embed.add_field(name="現在の状態", value=f"⚠️ **タイムアウト中** ({member.timed_out_until.strftime('%H:%M:%S')} まで)", inline=False)
+    else:
+        embed.add_field(name="現在の状態", value="🟢 正常 (制限なし)", inline=False)
+
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+@moderation_group.command(name="untimeout", description="メンバーのタイムアウトを解除(管理者)")
+@app_commands.checks.has_permissions(administrator=True)
+async def moderation_untimeout(interaction: discord.Interaction, member: discord.Member):
+    try:
+        await member.timeout(None, reason="管理者によるタイムアウト解除")
+        await interaction.response.send_message(f"✅ {member.mention} のタイムアウトを解除しました。", ephemeral=True)
+    except Exception as e:
+        await interaction.response.send_message(f"❌ 解除に失敗しました: {e}", ephemeral=True)
+
+client.tree.add_command(moderation_group)
 
 # --- 自動下移動付き固定メッセージコマンド ---
 pin_group = app_commands.Group(name="pin-message", description="固定メッセージ管理")
@@ -477,7 +598,7 @@ async def rule_show(interaction: discord.Interaction):
 @app_commands.checks.has_permissions(administrator=True)
 async def rule_set(interaction: discord.Interaction, content: str):
     client.server_rule_text = content.replace("\\n", "\n")
-    await interaction.response.send_message("✅ サー바ールールを更新しました。", ephemeral=True)
+    await interaction.response.send_message("✅ サーバールールを更新しました。", ephemeral=True)
 
 @rule_group.command(name="panel", description="ルールパネルをチャンネルに設置(管理者)")
 @app_commands.checks.has_permissions(administrator=True)
