@@ -57,7 +57,7 @@ class MyBot(discord.Client):
         self.update_status_task.start()
         self.refresh_status_messages_task.start()
 
-    @tasks.loop(seconds=30)
+    @tasks.loop(seconds=3)
     async def update_status_task(self):
         try:
             if self.custom_status:
@@ -99,7 +99,7 @@ class MyBot(discord.Client):
         days, hours = divmod(hours, 24)
         uptime_str = f"{days}日 {hours}時間 {minutes}分 {seconds}秒" if days > 0 else f"{hours}時間 {minutes}分 {seconds}秒"
 
-        embed = discord.Embed(title="🟢 Bot システム稼働状況 (1秒間隔更新中)", color=discord.Color.green())
+        embed = discord.Embed(title="🟢 Bot システム稼働状況 ", color=discord.Color.green())
         embed.add_field(name="接続状態", value="正常稼働中 (Online)", inline=True)
         embed.add_field(name="応答速度 (Ping)", value=f"`{latency} ms`", inline=True)
         embed.add_field(name="導入サーバー数", value=f"`{len(self.guilds)}` サーバー", inline=True)
@@ -214,19 +214,21 @@ class SuggestionModal(Modal, title="💡 提案を投稿する"):
         await msg.add_reaction("👎")
         await interaction.response.send_message("✨ 提案を投稿しました！", ephemeral=True)
 
+# 選挙タイプ選択・作成用モーダル
 class ElectionModal(Modal, title="🗳️ 選挙を作成する"):
-    election_title = TextInput(label="選挙のタイトル・テーマ", placeholder="例: 次回イベントのゲームは何にする？", required=True)
-    option_a = TextInput(label="選択肢 A", placeholder="例: Minecraft", required=True)
-    option_b = TextInput(label="選択肢 B", placeholder="例: Among Us", required=True)
+    election_type = TextInput(label="選挙タイプ (モデレーター / ゲーム / その他)", placeholder="例: モデレーター選挙", required=True, max_length=30)
+    election_title = TextInput(label="選挙のタイトル・テーマ", placeholder="例: 新規モデレーター立候補者の投票", required=True)
+    option_a = TextInput(label="選択肢 A", placeholder="例: 候補者 1 / Minecraft", required=True)
+    option_b = TextInput(label="選択肢 B", placeholder="例: 候補者 2 / Among Us", required=True)
 
     async def on_submit(self, interaction: discord.Interaction):
         desc = f"**【投票受付中】**\n\n🇦 : {self.option_a.value}\n🇧 : {self.option_b.value}"
-        embed = discord.Embed(title=f"🗳️ 選挙: {self.election_title.value}", description=desc, color=discord.Color.gold())
+        embed = discord.Embed(title=f"🗳️ [{self.election_type.value}] {self.election_title.value}", description=desc, color=discord.Color.gold())
         embed.set_footer(text=f"主催者: {interaction.user.display_name}")
         msg = await interaction.channel.send(embed=embed)
         await msg.add_reaction("🇦")
         await msg.add_reaction("🇧")
-        await interaction.response.send_message("✨ 選挙パネルを作成しました！", ephemeral=True)
+        await interaction.response.send_message(f"✨ 「{self.election_type.value}」の選挙パネルを作成しました！", ephemeral=True)
 
 class ManagementSelect(Select):
     def __init__(self):
@@ -249,7 +251,7 @@ class ManagementSelect(Select):
             guild = interaction.guild
             await interaction.response.send_message(f"🏰 サーバー名: **{guild.name}** / メンバー数: **{guild.member_count}人** / オーナー: {guild.owner.mention}", ephemeral=True)
         elif val == "rules":
-            embed = discord.Embed(title="📜 サーバールール", description=client.server_rule_text, color=discord.Color.gold())
+            embed = discord.Embed(title="📜 サー바ールール", description=client.server_rule_text, color=discord.Color.gold())
             await interaction.response.send_message(embed=embed, ephemeral=True)
         elif val == "status":
             latency = round(client.latency * 1000)
@@ -475,7 +477,7 @@ async def rule_show(interaction: discord.Interaction):
 @app_commands.checks.has_permissions(administrator=True)
 async def rule_set(interaction: discord.Interaction, content: str):
     client.server_rule_text = content.replace("\\n", "\n")
-    await interaction.response.send_message("✅ サーバールールを更新しました。", ephemeral=True)
+    await interaction.response.send_message("✅ サー바ールールを更新しました。", ephemeral=True)
 
 @rule_group.command(name="panel", description="ルールパネルをチャンネルに設置(管理者)")
 @app_commands.checks.has_permissions(administrator=True)
