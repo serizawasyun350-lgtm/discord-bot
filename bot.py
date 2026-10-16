@@ -190,9 +190,10 @@ async def on_message(message: discord.Message):
         client.sticky_messages[channel_id]["message_id"] = new_msg.id
 
 # ==========================================
-# UIコンポーネント & モーダル定義
+# UIコンポーネント & モーダル定義（チケット機能を含む）
 # ==========================================
 
+# チケット作成ボタンビュー
 class TicketCreateView(View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -220,6 +221,7 @@ class TicketCreateView(View):
         await ticket_channel.send(embed=embed, view=close_view)
         await interaction.response.send_message(f"✨ チケットを作成しました: {ticket_channel.mention}", ephemeral=True)
 
+# チケット閉じるボタンビュー
 class TicketCloseView(View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -232,6 +234,7 @@ class TicketCloseView(View):
             await interaction.channel.delete()
         except Exception:
             pass
+
 
 # ⚙️ 11個のボタンを搭載した管理者専用コントロールパネル
 class AdminControlPanelView(View):
@@ -300,7 +303,7 @@ class AdminControlPanelView(View):
     async def btn_10(self, interaction: discord.Interaction, button: Button):
         if not interaction.user.guild_permissions.administrator:
             return await interaction.response.send_message("❌ 管理者専用です。", ephemeral=True)
-        await interaction.response.send_message("🤖 オールインワンDiscord Bot v3.5", ephemeral=True)
+        await interaction.response.send_message("🤖 オールインワンDiscord Bot v3.6", ephemeral=True)
 
     @discord.ui.button(label="11. メンテナンス案内", style=discord.ButtonStyle.danger, row=3, custom_id="adm_btn_11")
     async def btn_11(self, interaction: discord.Interaction, button: Button):
@@ -310,39 +313,16 @@ class AdminControlPanelView(View):
 
 
 # ==========================================
-# 🚀 新規追加された /bump と /up コマンド
+# 🚀 チケットパネル設置コマンド & 各種コマンド群
 # ==========================================
 
-@client.tree.command(name="bump", description="サーバーの宣伝（BUMP）案内を表示する")
-async def bump_cmd(interaction: discord.Interaction):
-    embed = discord.Embed(
-        title="🚀 サーバーBUMP（宣伝）案内",
-        description=(
-            f"{interaction.user.mention} さん、ありがとうございます！\n\n"
-            "DISBOARDなどの宣伝Botが導入されているサーバーでは、"
-            "`/bump` コマンドを入力することでサーバーを掲示板のトップに浮上させることができます。\n\n"
-            "💡 *（※このサーバーにDISBOARD等のBotが導入されていない場合は、公式Botを招待してください）*"
-        ),
-        color=discord.Color.blurple()
-    )
-    await interaction.response.send_message(embed=embed)
-
-@client.tree.command(name="up", description="サーバーの評価アップ（UP）案内を表示する")
-async def up_cmd(interaction: discord.Interaction):
-    embed = discord.Embed(
-        title="📈 サーバーUP案内",
-        description=(
-            f"{interaction.user.mention} さん、サーバーの応援ありがとうございます！\n\n"
-            "サーバーのランキングサイトや連携Botに対して `/up` などを送信することで、サーバーの評価や順位をアップさせることができます。"
-        ),
-        color=discord.Color.green()
-    )
-    await interaction.response.send_message(embed=embed)
-
-
-# ==========================================
-# その他のコマンド群
-# ==========================================
+@client.tree.command(name="ticket_panel", description="サポートチケット作成パネルを設置する(管理者)")
+@app_commands.checks.has_permissions(administrator=True)
+async def ticket_panel_cmd(interaction: discord.Interaction):
+    embed = discord.Embed(title="🎫 サポートチケット", description="下のボタンを押すとあなた専用の問い合わせチャンネルが作成されます。", color=discord.Color.blue())
+    view = TicketCreateView()
+    await interaction.channel.send(embed=embed, view=view)
+    await interaction.response.send_message("✨ チケットパネルを設置しました。", ephemeral=True)
 
 @client.tree.command(name="admin_panel", description="11個の管理ボタンを搭載した管理者専用コントロールパネルを設置する(管理者)")
 @app_commands.checks.has_permissions(administrator=True)
@@ -356,13 +336,23 @@ async def admin_panel_cmd(interaction: discord.Interaction):
     await interaction.channel.send(embed=embed, view=view)
     await interaction.response.send_message("✨ 11個のボタン付き管理者パネルを設置しました。", ephemeral=True)
 
-@client.tree.command(name="ticket_panel", description="サポートチケット作成パネルを設置する(管理者)")
-@app_commands.checks.has_permissions(administrator=True)
-async def ticket_panel_cmd(interaction: discord.Interaction):
-    embed = discord.Embed(title="🎫 サポートチケット", description="下のボタンを押すとあなた専用の問い合わせチャンネルが作成されます。", color=discord.Color.blue())
-    view = TicketCreateView()
-    await interaction.channel.send(embed=embed, view=view)
-    await interaction.response.send_message("✨ チケットパネルを設置しました。", ephemeral=True)
+@client.tree.command(name="bump", description="サーバーの宣伝（BUMP）案内を表示する")
+async def bump_cmd(interaction: discord.Interaction):
+    embed = discord.Embed(
+        title="🚀 サーバーBUMP（宣伝）案内",
+        description=f"{interaction.user.mention} さん、ありがとうございます！\n\n`/bump` コマンドでサーバーを掲示板のトップに浮上させることができます。",
+        color=discord.Color.blurple()
+    )
+    await interaction.response.send_message(embed=embed)
+
+@client.tree.command(name="up", description="サーバーの評価アップ（UP）案内を表示する")
+async def up_cmd(interaction: discord.Interaction):
+    embed = discord.Embed(
+        title="📈 サーバーUP案内",
+        description=f"{interaction.user.mention} さん、応援ありがとうございます！ `/up` でサーバーの順位をアップできます。",
+        color=discord.Color.green()
+    )
+    await interaction.response.send_message(embed=embed)
 
 @client.tree.command(name="dice", description="1〜6のサイコロを振る")
 async def dice_cmd(interaction: discord.Interaction):
@@ -599,7 +589,7 @@ async def userinfo_cmd(interaction: discord.Interaction, member: discord.Member 
 
 @client.tree.command(name="help", description="使い方を表示")
 async def help_cmd(interaction: discord.Interaction):
-    await interaction.response.send_message("📖 `/admin_panel` から11個の管理ボタンを設置できます！", ephemeral=True)
+    await interaction.response.send_message("📖 `/ticket_panel` でチケットパネル、`/admin_panel` で管理者用パネルを設置できます！", ephemeral=True)
 
 # 起動
 token = os.environ.get("DISCORD_TOKEN")
