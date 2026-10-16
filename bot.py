@@ -44,13 +44,14 @@ class MyBot(discord.Client):
         self.tree = app_commands.CommandTree(self)
         self.user_message_timestamps = {}
         
-        # ユーザーごとのモデレーション対応履歴 {user_id: {"warn_count": int, "last_penalty": str}}
+        # ユーザーごとのモデレーション対応履歴
         self.user_moderation_records = {}
 
-        # ユーザーごとの対応状況ステータス {user_id: {"status": str, "note": str}}
+        # ユーザーごとの対応状況ステータス
         self.user_availability_status = {}
 
         self.auth_role_id = None
+        self.web_auth_enabled = True
         self.server_rule_text = "1. 誹謗中傷や暴言の禁止\n2. スパム・連投行為の禁止\n3. 宣伝行為は専用チャンネルでのみ許可\n4. 運営・管理者の指示に従うこと"
         self.start_time = datetime.datetime.now(datetime.timezone.utc)
         self.custom_status = None
@@ -313,6 +314,7 @@ class UtilityPanelView(View):
             "• `/help` : コマンド一覧を表示\n"
             "• `/status` : リアルタイム稼働状況を表示（1秒間隔更新）\n"
             "• `/user_status` : メンバーの対応可能状態を設定・確認\n"
+            "• `/web_auth` : Web認証リンクの発行・管理\n"
             "• `/server` : サーバーの情報を表示\n"
             "• `/poll` : 簡易アンケートを作成\n"
             "• `/userinfo` : ユーザー情報を確認\n"
@@ -361,6 +363,46 @@ class UtilityPanelView(View):
 # ==========================================
 # 各種スラッシュコマンド群
 # ==========================================
+
+# --- Web認証コマンド (/web_auth) ---
+class WebAuthLinkView(View):
+    def __init__(self, auth_url: str):
+        super().__init__(timeout=180)
+        self.add_item(Button(label="🌐 認証ページを開く", url=auth_url, style=discord.ButtonStyle.link))
+
+@client.tree.command(name="web_auth", description="Web認証の案内表示およびシステム管理")
+@app_commands.choices(mode=[
+    app_commands.Choice(name="🌐 Web認証リンクを発行する", value="get_link"),
+    app_commands.Choice(name="⚙️ Web認証を有効化する (管理者)", value="enable"),
+    app_commands.Choice(name="⚙️ Web認証を無効化する (管理者)", value="disable"),
+])
+async def web_auth_cmd(interaction: discord.Interaction, mode: str):
+    if mode == "get_link":
+        if not client.web_auth_enabled:
+            await interaction.response.send_message("❌ 現在Web認証システムは無効化されています。", ephemeral=True)
+            return
+
+        # WebサーバーのベースURLを取得
+        port = os.environ.get("PORT", 10000)
+        auth_url = f"http://localhost:{port}/"
+
+        embed = discord.Embed(
+            title="🌐 Web認証ポータル",
+            description="以下のボタンをクリックしてWeb認証ページにアクセスし、認証手続きを完了してください。",
+            color=discord.Color.blue()
+        )
+        view = WebAuthLinkView(auth_url=auth_url)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+
+    elif mode in ["enable", "disable"]:
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("❌ Web認証の設定変更は管理者のみ実行できます。", ephemeral=True)
+            return
+
+        client.web_auth_enabled = (mode == "enable")
+        status_str = "🟢 有効" if client.web_auth_enabled else "🔴 無効"
+        await interaction.response.send_message(f"⚙️ Web認証システムを **{status_str}** に変更しました。", ephemeral=True)
+
 
 # --- ユーザーの対応可能状態コマンド (/user_status) ---
 @client.tree.command(name="user_status", description="ユーザーの対応可能状態を確認・設定する")
